@@ -60,7 +60,10 @@ class DnsServer:
         self._on_query = on_query
 
         self._udp_sockets: list[socket.socket] = []
-        self._tcp_socket: socket.socket | None = None
+        # One listening socket per address family.  A single socket cannot
+        # serve both IPv4 and IPv6: the second family would replace the
+        # first one, which would then be closed and its port released.
+        self._tcp_sockets: list[socket.socket] = []
         self._threads: list[threading.Thread] = []
         self._executor: ThreadPoolExecutor | None = None
         self._running = threading.Event()
@@ -134,7 +137,7 @@ class DnsServer:
 
             self._udp_sockets.append(opened[-1])
             if self.enable_tcp:
-                self._tcp_socket = opened[0]
+                self._tcp_sockets.append(opened[0])
             self.port = chosen
             self._bound_ports.append((host, chosen))
             _LOGGER.info("DNS listener ready on %s:%d (UDP and TCP)", host, chosen)
@@ -150,12 +153,12 @@ class DnsServer:
             except OSError:
                 pass
         self._udp_sockets.clear()
-        if self._tcp_socket is not None:
+        for sock in self._tcp_sockets:
             try:
-                self._tcp_socket.close()
+                sock.close()
             except OSError:
                 pass
-            self._tcp_socket = None
+        self._tcp_sockets.clear()
         self._bound_ports.clear()
 
     def _open_udp(self, host: str, port: int) -> tuple[socket.socket, int]:
@@ -197,7 +200,7 @@ class DnsServer:
 
     def serve_forever(self) -> None:
         """Run the server until :meth:`shutdown` is called."""
-        if not self._udp_sockets and self._tcp_socket is None:
+        if not self._udp_sockets and not self._tcp_sockets:
             self.bind()
         self._running.set()
 
@@ -208,8 +211,10 @@ class DnsServer:
             thread.start()
             self._threads.append(thread)
 
-        if self._tcp_socket is not None:
-            thread = threading.Thread(target=self._tcp_loop, name="dns-tcp", daemon=True)
+        for index, sock in enumerate(self._tcp_sockets):
+            thread = threading.Thread(
+                target=self._tcp_loop, args=(sock,), name=f"dns-tcp-{index}", daemon=True
+            )
             thread.start()
             self._threads.append(thread)
 
@@ -225,9 +230,9 @@ class DnsServer:
         for sock in self._udp_sockets:
             close_listener(sock)
         self._udp_sockets.clear()
-        if self._tcp_socket is not None:
-            close_listener(self._tcp_socket)
-            self._tcp_socket = None
+        for sock in self._tcp_sockets:
+            close_listener(sock)
+        self._tcp_sockets.clear()
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
@@ -256,11 +261,10 @@ class DnsServer:
                 continue
             self._submit(self._handle_udp, sock, data, address)
 
-    def _tcp_loop(self) -> None:
-        assert self._tcp_socket is not None
+    def _tcp_loop(self, listener: socket.socket) -> None:
         while not self._stop_event.is_set():
             try:
-                client, _address = self._tcp_socket.accept()
+                client, _address = listener.accept()
             except TimeoutError:
                 continue
             except OSError:

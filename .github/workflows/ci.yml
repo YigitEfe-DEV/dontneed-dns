@@ -130,3 +130,94 @@ jobs:
           dontneed-dns check || true
           dontneed-dns logs -n 20
           dontneed-dns uninstall --scope user --yes
+
+  windows-install:
+    name: Scheduled tasks (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Check the PowerShell scripts
+        shell: pwsh
+        run: ./scripts/check_powershell.ps1
+
+      - name: Build the portable executable
+        run: |
+          python -m pip install pyinstaller
+          pyinstaller --noconfirm --clean --onefile --console `
+            --name dontneed-dns `
+            --collect-all dontneed_dns `
+            --collect-all textual `
+            --collect-all typer `
+            --collect-all rich `
+            src/dontneed_dns/__main__.py
+
+      - name: Assemble the archive
+        run: python scripts/build_release.py --platform windows --output dist --no-wheelhouse --executable dist/dontneed-dns.exe
+
+      - name: Unpack the archive
+        shell: pwsh
+        run: |
+          Expand-Archive dist/dontneed-dns-windows-x86_64.zip -DestinationPath package -Force
+          Get-ChildItem package/dontneed-dns-windows-x86_64
+
+      - name: Install and check that the tasks exist
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $package = "package/dontneed-dns-windows-x86_64"
+          .\$package\install.ps1
+          foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
+            schtasks /Query /TN $task /FO LIST /V
+            if ($LASTEXITCODE -ne 0) { throw "the task $task does not exist" }
+            # The task has to run the executable of this project for the
+            # account of the runner.
+            $xml = schtasks /Query /TN $task /XML
+            if (-not ($xml -match 'dontneed-dns.exe')) { throw "the task $task runs another program" }
+          }
+          & "$env:LOCALAPPDATA\dontneed-dns\dontneed-dns.exe" status
+
+      - name: Start the components through the tasks and check the listeners
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\dontneed-dns\dontneed-dns.exe"
+          & $exe dns start
+          if ($LASTEXITCODE -ne 0) { throw "the resolver could not be started" }
+          & $exe proxy start
+          if ($LASTEXITCODE -ne 0) { throw "the proxy could not be started" }
+          Start-Sleep -Seconds 8
+          & $exe status
+          # Every address family needs its own TCP listener.
+          $listeners = Get-NetTCPConnection -LocalPort 5354 -State Listen
+          $addresses = $listeners | ForEach-Object { $_.LocalAddress }
+          if ($addresses -notcontains '127.0.0.1') { throw "the IPv4 TCP listener is missing: $addresses" }
+          if ($addresses -notcontains '::1') { throw "the IPv6 TCP listener is missing: $addresses" }
+          # The health check connects over TCP and sends a real query.
+          & $exe check
+          if ($LASTEXITCODE -ne 0) { throw "the health check failed" }
+          & $exe logs -n 10 || true
+
+      - name: Uninstall and check that the tasks are gone
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $package = "package/dontneed-dns-windows-x86_64"
+          .\$package\uninstall.ps1
+          foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
+            schtasks /Query /TN $task
+            if ($LASTEXITCODE -eq 0) { throw "the task $task still exists" }
+          }
+          # The processes have to be gone as well.
+          Start-Sleep -Seconds 3
+          $running = Get-Process dontneed-dns -ErrorAction SilentlyContinue
+          if ($running) { throw "a process of the project is still running" }

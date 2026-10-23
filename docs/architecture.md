@@ -55,7 +55,7 @@ aspirational.
 | `proxy/fragmentation.py` | The experimental TLS ClientHello fragmenter |
 | `proxy/server.py` | The proxy server and the relay |
 | `platforms/linux/` | systemd, distribution detection, installation |
-| `platforms/windows/` | Task Scheduler, Windows services, paths |
+| `platforms/windows/` | Task Scheduler (XML definitions), Windows services, paths |
 
 ## Design decisions
 
@@ -140,4 +140,11 @@ closed, the pending work is cancelled and the listener ports are released.
   mocked; the same tests run on the Windows runner of the workflow.
 
 The Windows tests are executed on a real Windows runner in GitHub Actions.
-A mocked test never counts as proof that a feature works on Windows.
+A mocked test never counts as proof that a feature works on Windows.  Two
+jobs of the workflow go beyond the unit tests: one parses the PowerShell
+scripts with the PowerShell parser, the other installs the project on the
+runner, checks that the scheduled tasks exist and removes them again.
+
+The scripts of the Windows edition are additionally executed with PowerShell
+on every platform that has it, against a stand in for the executable, so
+that the error handling of the installer is checked as well.

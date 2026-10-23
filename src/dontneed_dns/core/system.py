@@ -25,6 +25,7 @@ from dontneed_dns.core.constants import DEFAULT_COMMAND_TIMEOUT
 __all__ = [
     "CommandResult",
     "close_listener",
+    "describe_failure",
     "is_linux",
     "is_root",
     "is_windows",
@@ -57,6 +58,31 @@ class CommandResult:
         detail = (self.stderr or self.stdout).strip().splitlines()
         tail = detail[-1] if detail else ""
         return f"{self.argv[0]} exited with status {self.returncode}" + (f": {tail}" if tail else "")
+
+    def output(self) -> str:
+        """The complete output of the command, stdout and stderr.
+
+        The error of a Windows administration command is often the only
+        piece of information that explains what went wrong, so it is
+        reported as a whole and not reduced to its last line.
+        """
+        parts = [part for part in (self.stdout.strip(), self.stderr.strip()) if part]
+        return "\n".join(parts)
+
+
+def describe_failure(result: CommandResult) -> str:
+    """Describe a failed command without losing any part of its output.
+
+    The complete output is reported because the last line of an error
+    message is often not the part that explains what went wrong.
+    """
+    output = result.output()
+    headline = f"{result.argv[0]} exited with status {result.returncode}"
+    if result.timed_out:
+        headline = f"{result.argv[0]} timed out"
+    if not output:
+        return headline
+    return f"{headline}\n{output}"
 
 
 def run_command(

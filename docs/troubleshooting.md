@@ -85,15 +85,48 @@ schtasks /Query /TN dontneed-dns-proxy /V
 schtasks /Run /TN dontneed-dns-proxy
 ```
 
-* **"Access is denied"** - the task was registered for a different user.
-  Remove it with `schtasks /Delete /TN dontneed-dns-proxy /F` and register
-  it again with `dontneed-dns install --scope user --yes`.
+* **"Access is denied"** while the task is created - the terminal is not
+  allowed to create a scheduled task.  Run the installer from an elevated
+  PowerShell window:
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+  ```
+
+  The output of the installation is written to
+  `%LOCALAPPDATA%\dontneed-dns\install-output.txt`.
+* **The task was registered for a different user** - remove it with
+  `schtasks /Delete /TN dontneed-dns-proxy /F` and register it again with
+  `dontneed-dns install --scope user --yes`.
 * **The task is "Ready" but nothing happens** - the task has the trigger
   `ONLOGON`, so it starts at the next login.  `dontneed-dns proxy start`
   starts it immediately.
 * **The executable is blocked** - Windows may quarantine an unsigned
   executable.  Compare the SHA-256 checksum of the file with the release
   before disabling any protection.
+* **The status shows "Running (not registered)"** - the process runs, but
+  no task exists for it.  It works, but it does not start again after a
+  reboot.  `dontneed-dns install --scope user --yes` registers it.
+
+## The DNS resolver does not answer over TCP
+
+```powershell
+Resolve-DnsName -Server 127.0.0.1 -Port 5354 -Type A discord.com
+```
+
+* **"nothing is listening on 127.0.0.1:5354"** - the TCP listener is
+  missing.  `dontneed-dns check` uses a TCP connection, so this message
+  means the TCP listener could not be opened.  The reason is in the log:
+
+  ```powershell
+  dontneed-dns logs -n 20
+  ```
+
+  A port that is already taken is reported as such.  Change
+  `dns.listen_port` in the configuration or stop the other program.
+* **Only the UDP listener works** - this was a defect of the releases up to
+  0.1.1: the IPv6 listener replaced the IPv4 TCP listener and closed its
+  port.  Update to 0.1.2 or newer.
 
 ## The port is in use
 

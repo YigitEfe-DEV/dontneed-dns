@@ -19,11 +19,14 @@ class FakeAdapter:
     """A platform adapter that records what was asked of it."""
 
     name = "linux"
+    scope = "user"
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.state = ServiceState.RUNNING
         self.enabled = True
+        #: The components whose installation fails.
+        self.fail_install: set[str] = set()
 
     def is_available(self) -> bool:
         return True
@@ -68,6 +71,11 @@ class FakeAdapter:
 
     def install(self, component: Component, *, scope: str = "user") -> OperationResult:
         self.calls.append(("install", f"{component.value}:{scope}"))
+        if component.value in self.fail_install:
+            return OperationResult.failure(
+                f"the task dontneed-dns-{component.value} could not be created.",
+                detail="schtasks exited with status 1\nERROR: Access is denied.",
+            )
         return OperationResult.success("installed")
 
     def uninstall(self, component: Component, *, scope: str = "user") -> OperationResult:
@@ -185,6 +193,28 @@ def test_install_installs_both_components(adapter: FakeAdapter, config_path: Pat
     assert result.exit_code == 0
     assert ("install", "dns:user") in adapter.calls
     assert ("install", "proxy:user") in adapter.calls
+
+
+def test_a_partial_installation_is_reported(adapter: FakeAdapter, config_path: Path) -> None:
+    adapter.fail_install = {"proxy"}
+    result = runner.invoke(cli.app, ["install", "--config", str(config_path), "--yes", "--scope", "user"])
+    assert result.exit_code == 1
+    assert "incomplete" in result.output.lower()
+    assert "Access is denied" in result.output
+
+
+def test_a_failed_installation_keeps_the_configuration(adapter: FakeAdapter, config_path: Path) -> None:
+    """A failure must not delete the configuration of the user."""
+    adapter.fail_install = {"dns", "proxy"}
+    runner.invoke(cli.app, ["install", "--config", str(config_path), "--yes", "--scope", "user"])
+    assert config_path.exists()
+
+
+def test_the_status_reports_an_unregistered_process(adapter: FakeAdapter, config_path: Path) -> None:
+    adapter.state = ServiceState.RUNNING_UNREGISTERED
+    result = runner.invoke(cli.app, ["status", "--config", str(config_path)])
+    assert result.exit_code == 0
+    assert "not registered" in result.output
 
 
 def test_uninstall_removes_both_components(adapter: FakeAdapter, config_path: Path) -> None:

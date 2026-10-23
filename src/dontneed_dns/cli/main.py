@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import typer
@@ -72,6 +73,11 @@ EXIT_UNAVAILABLE = 3
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _command_name() -> str:
+    """The name the command was started with."""
+    return Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "dontneed-dns"
 
 
 def _load(config_path: str | None = None) -> tuple[Config, PlatformAdapter]:
@@ -261,6 +267,14 @@ def status_command(
     console.print(f"[dim]{adapter.describe()}[/dim]")
     console.print(f"[dim]configuration: {config.path}[/dim]")
 
+    for component in Component:
+        if adapter.status(component) is ServiceState.RUNNING_UNREGISTERED:
+            console.print(
+                f"[yellow]{component.label} runs, but it is not registered.[/yellow]"
+                " It will not start again after a reboot or a new login."
+            )
+            console.print(f"  Run '{_command_name()} install --scope {adapter.scope} --yes' to register it.")
+
 
 @app.command("check", help="Run the health checks.")
 def check_command(
@@ -334,10 +348,29 @@ def install_command(
             raise typer.Exit(EXIT_ERROR)
 
     exit_code = EXIT_OK
+    installed: list[Component] = []
+    failed: list[Component] = []
     for component in Component:
         result = adapter.install(component, scope=effective_scope)
-        exit_code = max(exit_code, 0 if result.ok else EXIT_ERROR)
+        if result.ok:
+            installed.append(component)
+        else:
+            failed.append(component)
+            exit_code = EXIT_ERROR
         _print_result(result)
+
+    if failed and installed:
+        # A partial installation must not look like a successful one.
+        names = ", ".join(component.label for component in failed)
+        error_console.print(
+            f"[yellow]The installation is incomplete:[/yellow] {names} could not be installed."
+        )
+        error_console.print(
+            "  The components that were installed work, but they are not registered to start automatically."
+        )
+        error_console.print(
+            f"  Run '{_command_name()} install --scope {effective_scope} --yes' again to retry."
+        )
 
     if start:
         for component in Component:

@@ -7,6 +7,7 @@ or a SOCKS5 greeting and report what happened.  Nothing is modified.
 from __future__ import annotations
 
 import socket
+import sys
 from dataclasses import dataclass
 
 from dontneed_dns.core.config import Config
@@ -161,17 +162,28 @@ def run_health_checks(config: Config, *, timeout: float = 3.0) -> list[HealthChe
             )
         )
 
-    nameservers = read_resolv_conf_nameservers()
-    checks.append(
-        HealthCheck(
-            "System resolver",
-            bool(nameservers),
-            f"nameservers: {', '.join(nameservers)}"
-            if nameservers
-            else "no nameserver found in /etc/resolv.conf",
-            Severity.WARNING,
+    if sys.platform.startswith("win"):
+        # The Windows resolver cannot be read from a file.
+        checks.append(
+            HealthCheck(
+                "System resolver",
+                True,
+                "the Windows resolver is used",
+                Severity.WARNING,
+            )
         )
-    )
+    else:
+        nameservers = read_resolv_conf_nameservers()
+        checks.append(
+            HealthCheck(
+                "System resolver",
+                bool(nameservers),
+                f"nameservers: {', '.join(nameservers)}"
+                if nameservers
+                else "no nameserver found in /etc/resolv.conf",
+                Severity.WARNING,
+            )
+        )
 
     fragment_state = "enabled" if config.proxy.fragmentation_enabled else "disabled"
     checks.append(

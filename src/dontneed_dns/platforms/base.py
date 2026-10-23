@@ -45,6 +45,8 @@ class ServiceState(StrEnum):
     STOPPED = "stopped"
     FAILED = "failed"
     UNKNOWN = "unknown"
+    #: The process runs, but nothing is registered to start it again.
+    RUNNING_UNREGISTERED = "running_unregistered"
 
     @property
     def label(self) -> str:
@@ -56,6 +58,7 @@ class ServiceState(StrEnum):
             ServiceState.STOPPED: "Stopped",
             ServiceState.FAILED: "Failed",
             ServiceState.UNKNOWN: "Unknown",
+            ServiceState.RUNNING_UNREGISTERED: "Running (not registered)",
         }[self]
 
 
@@ -99,6 +102,9 @@ class PlatformAdapter(ABC):
 
     #: Short platform identifier (``linux`` / ``windows``).
     name: str = "unknown"
+
+    #: The scope the adapter manages: ``user`` or ``system``.
+    scope: str = "user"
 
     # -- introspection ----------------------------------------------------
 
@@ -165,3 +171,12 @@ class PlatformAdapter(ABC):
     @abstractmethod
     def install_paths(self, scope: str = "user") -> dict[str, Path]:
         """Return the paths this project writes to for ``scope``."""
+
+    def running_pid(self, component: Component) -> int | None:
+        """The process id of a running component, or ``None``.
+
+        A process can run without being registered, for example when it was
+        started by hand or when the registration failed.  Such a process
+        belongs to this project and has to be found by the uninstall.
+        """
+        return None

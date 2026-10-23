@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-23
+
+Fixes the two problems of the installation report of a Windows machine and
+makes the state of the installation consistent on both platforms.
+
+### Fixed
+
+- The IPv4 TCP listener of the DNS resolver was closed as soon as the IPv6
+  listener was opened.  A single socket cannot serve both families: the
+  second one replaced the first, which was then closed and released its
+  port, so a TCP query to `127.0.0.1:5354` was refused while the UDP
+  listener worked.  Every address family has its own socket and its own
+  accept loop now.
+- The scheduled tasks of the Windows edition are created from an XML
+  definition instead of from the command line form of `schtasks`.  The
+  command line form strips the outer quotes of the `/TR` value, which
+  breaks the command as soon as the path of the executable or one of its
+  arguments contains a space.  The XML definition also uses a logon trigger
+  for the current user with the `InteractiveToken` logon type, which the
+  Task Scheduler accepts without administrator rights, while the "at log
+  on" trigger of the command line form is rejected with "Access is
+  denied" in a terminal that is not elevated.
+- A scheduled task is read back after it was created.  A task that exists
+  but runs another command or belongs to another account is reported as a
+  failure instead of a successful installation.
+- The complete output of a failed command is reported.  Only the last line
+  of the error message was kept, which is often not the part that explains
+  what went wrong.
+- The source installation of the Windows edition works again.  The task
+  starts in the directory of the package, which `python -m` puts at the
+  beginning of `sys.path`, so the package is found even when it is not
+  installed in the interpreter.  The previous attempt used the shell
+  operator `&&`, which a scheduled task does not interpret at all, so the
+  task never started.
+
+### Added
+
+- The state "Running (not registered)" for a component whose process runs
+  but is not registered to start automatically.  The status output explains
+  that the component will not survive a reboot and how to register it.
+- The uninstall stops a component whose process runs without a
+  registration, because it belongs to this project and would keep the
+  port.
+- An incomplete installation is reported as such, with the hint to run the
+  installation again.  The configuration of the user is kept.
+- The installation script of Windows writes the output of every step to
+  `install-output.txt` and reads the tasks back after the installation.
+- A workflow that installs the project on a Windows runner, checks that the
+  scheduled tasks exist and removes them again.
+
+### Changed
+
+- The health check describes the resolver of the running platform instead
+  of always reading `/etc/resolv.conf`.
+
 ## [0.1.1] - 2026-10-23
 
 ### Fixed

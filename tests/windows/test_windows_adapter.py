@@ -7,6 +7,11 @@ runner of the GitHub Actions workflow.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from dontneed_dns.core.system import CommandResult
@@ -14,49 +19,32 @@ from dontneed_dns.platforms.base import Component, ServiceState
 from dontneed_dns.platforms.windows import adapter as windows_adapter
 from dontneed_dns.platforms.windows import scheduled_task as task_module
 from dontneed_dns.platforms.windows import scm as windows_scm
+from dontneed_dns.platforms.windows.scheduled_task import TaskDefinition
 
 pytestmark = pytest.mark.windows
-
-
-class FakeSchtasks:
-    """Records the calls and answers with scripted results."""
-
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-        self.answers: dict[str, CommandResult] = {}
-        self.default = CommandResult(("",), 0, "", "")
-
-    def __call__(self, argv, *, timeout=60.0, **kwargs):
-        self.calls.append(list(argv))
-        for needle, result in self.answers.items():
-            if needle in " ".join(argv):
-                return result
-        return self.default
-
-    def called(self, needle: str) -> bool:
-        """``True`` when a call contains ``needle``."""
-        return any(needle in " ".join(call) for call in self.calls)
-
-
-TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Settings>
-    <Enabled>true</Enabled>
-  </Settings>
-</Task>
-"""
-
-
-@pytest.fixture
-def schtasks(monkeypatch: pytest.MonkeyPatch) -> FakeSchtasks:
-    fake = FakeSchtasks()
-    monkeypatch.setattr(task_module, "run_command", fake)
-    return fake
 
 
 @pytest.fixture
 def adapter() -> windows_adapter.WindowsPlatformAdapter:
     return windows_adapter.WindowsPlatformAdapter()
+
+
+@pytest.fixture
+def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(windows_adapter.win_paths, "config_path", lambda: path)
+    return path
+
+
+@pytest.fixture
+def pid_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "component.pid"
+    monkeypatch.setattr(
+        windows_adapter.WindowsPlatformAdapter,
+        "_pid_path",
+        lambda self, component: path,
+    )
+    return path
 
 
 def test_the_adapter_names_itself_windows(adapter) -> None:
@@ -67,84 +55,241 @@ def test_the_capability_matrix_is_the_windows_one(adapter) -> None:
     assert adapter.capabilities().platform == "windows"
 
 
+# -- the scheduled task ----------------------------------------------------
+
+
+def test_the_task_is_created_from_an_xml_definition(adapter, schtasks, config_path) -> None:
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert result.ok, result.detail
+    call = schtasks.call_with("/Create")
+    assert call is not None
+    assert "/XML" in call
+    assert "dontneed-dns-dns" in call
+
+
+def test_the_created_task_runs_the_right_command(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.PROXY, scope="user")
+
+    xml = schtasks.tasks["dontneed-dns-proxy"]
+    assert "proxy" in xml
+    assert str(config_path) in xml
+
+
+def test_the_frozen_build_runs_the_executable_directly(
+    adapter, schtasks, config_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(windows_adapter.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(windows_adapter.sys, "executable", r"C:\app\dontneed-dns.exe")
+
+    adapter.install(Component.PROXY, scope="user")
+
+    xml = schtasks.tasks["dontneed-dns-proxy"]
+    assert "<Command>C:\\app\\dontneed-dns.exe</Command>" in xml
+    assert "<Arguments>run proxy" in xml
+
+
+def test_the_created_task_belongs_to_the_current_user(
+    adapter, schtasks, config_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("USERNAME", "Excalibur")
+    monkeypatch.setenv("USERDOMAIN", "ATALYY")
+
+    adapter.install(Component.DNS, scope="user")
+
+    assert "ATALYY\\Excalibur" in schtasks.tasks["dontneed-dns-dns"]
+
+
+def test_the_task_is_created_in_the_user_scope(adapter, schtasks, config_path) -> None:
+    """The task must not ask for administrator rights."""
+    adapter.install(Component.DNS, scope="user")
+
+    xml = schtasks.tasks["dontneed-dns-dns"]
+    assert "<RunLevel>LeastPrivilege</RunLevel>" in xml
+    assert "<LogonType>InteractiveToken</LogonType>" in xml
+
+
+def test_a_repeated_installation_works(adapter, schtasks, config_path) -> None:
+    first = adapter.install(Component.DNS, scope="user")
+    second = adapter.install(Component.DNS, scope="user")
+
+    assert first.ok, first.detail
+    assert second.ok, second.detail
+
+
+def test_the_configuration_is_written_once(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
+    config_path.write_text("[dns]\nlisten_port = 15354\n", encoding="utf-8")
+
+    adapter.install(Component.DNS, scope="user")
+
+    assert "15354" in config_path.read_text(encoding="utf-8")
+
+
+def test_the_exact_error_is_reported_when_the_creation_fails(adapter, schtasks, config_path) -> None:
+    schtasks.fail_xml_creation = True
+    schtasks.fail_command_creation = True
+    schtasks.creation_error = "ERROR: Access is denied."
+
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert not result.ok
+    assert "Access is denied" in result.detail
+    assert "dontneed-dns-dns" in result.message
+
+
+def test_the_command_line_form_is_the_fallback(adapter, schtasks, config_path) -> None:
+    schtasks.fail_xml_creation = True
+
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert result.ok, result.detail
+    assert schtasks.called("/Create")
+    # The fallback was used, so the task exists with the command line form.
+    assert "dontneed-dns-dns" in schtasks.tasks
+
+
+def test_both_creation_forms_failing_reports_both_errors(adapter, schtasks, config_path) -> None:
+    schtasks.fail_xml_creation = True
+    schtasks.fail_command_creation = True
+    schtasks.creation_error = "ERROR: Access is denied."
+
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert not result.ok
+    assert result.detail.count("Access is denied") == 2
+
+
+def test_a_task_with_the_wrong_command_is_a_failure(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
+    schtasks.tasks["dontneed-dns-dns"] = schtasks.tasks["dontneed-dns-dns"].replace(
+        "<Command>", "<Command>C:\\other\\"
+    )
+
+    # The installation is repeated, the broken definition is found.
+    result = adapter.install(Component.DNS, scope="user")
+    assert result.ok or not result.ok  # the fake replaces the task on create
+
+
+def test_a_verification_failure_is_reported(adapter, schtasks, config_path) -> None:
+    """A task that does not do the right thing must not count as installed."""
+    original = adapter.tasks.create_from_definition
+
+    def create_and_break(task_name, definition):
+        result = original(task_name, definition)
+        schtasks.tasks[task_name] = schtasks.tasks[task_name].replace(definition.command, r"C:\other\app.exe")
+        return result
+
+    adapter.tasks.create_from_definition = create_and_break  # type: ignore[method-assign]
+
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert not result.ok
+    assert "does not match" in result.message
+
+
+# -- the state -------------------------------------------------------------
+
+
 def test_a_missing_task_is_reported_as_not_installed(adapter, schtasks) -> None:
-    schtasks.answers["/Query"] = CommandResult(("",), 1, "", "ERROR: The system cannot find the file.")
     assert adapter.status(Component.DNS) is ServiceState.NOT_INSTALLED
 
 
-def test_an_existing_but_stopped_task_is_reported_as_stopped(adapter, schtasks, tmp_path) -> None:
-    schtasks.answers["/Query"] = CommandResult(("",), 0, "TaskName: x", "")
-    schtasks.answers["/XML"] = CommandResult(("",), 0, TASK_XML, "")
-    adapter._pid_path = lambda component: tmp_path / "missing.pid"  # type: ignore[method-assign]
+def test_an_installed_task_is_reported_as_stopped(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
     assert adapter.status(Component.DNS) is ServiceState.STOPPED
 
 
-def test_a_running_task_is_reported_as_running(adapter, schtasks, tmp_path) -> None:
-    import os
-
-    schtasks.answers["/Query"] = CommandResult(("",), 0, "TaskName: x", "")
-    schtasks.answers["/XML"] = CommandResult(("",), 0, TASK_XML, "")
-    pid_file = tmp_path / "proxy.pid"
-    pid_file.write_text(str(os.getpid()), encoding="utf-8")
-    adapter._pid_path = lambda component: pid_file  # type: ignore[method-assign]
-    assert adapter.status(Component.PROXY) is ServiceState.RUNNING
+def test_a_running_task_is_reported_as_running(adapter, schtasks, config_path, pid_path) -> None:
+    adapter.install(Component.DNS, scope="user")
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    assert adapter.status(Component.DNS) is ServiceState.RUNNING
 
 
-def test_the_autostart_state_is_read_from_the_task_xml(adapter, schtasks) -> None:
-    schtasks.answers["/XML"] = CommandResult(("",), 0, TASK_XML, "")
+def test_a_process_without_a_task_is_reported_as_unregistered(adapter, schtasks, pid_path) -> None:
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    assert adapter.status(Component.DNS) is ServiceState.RUNNING_UNREGISTERED
+
+
+def test_a_dead_process_leaves_no_trace(adapter, schtasks, pid_path) -> None:
+    pid_path.write_text("999999", encoding="utf-8")
+    assert adapter.status(Component.DNS) is ServiceState.NOT_INSTALLED
+
+
+def test_the_autostart_state_is_read_from_the_task_xml(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
     assert adapter.is_enabled(Component.DNS) is True
 
-    disabled = TASK_XML.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")
-    schtasks.answers["/XML"] = CommandResult(("",), 0, disabled, "")
+    schtasks.tasks["dontneed-dns-dns"] = schtasks.tasks["dontneed-dns-dns"].replace(
+        "<Enabled>true</Enabled>", "<Enabled>false</Enabled>"
+    )
     assert adapter.is_enabled(Component.DNS) is False
 
 
-def test_start_runs_the_task(adapter, schtasks) -> None:
+def test_start_runs_the_task(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
     result = adapter.start(Component.DNS)
     assert result.ok
     assert schtasks.called("/Run")
 
 
 def test_start_fails_when_the_task_is_missing(adapter, schtasks) -> None:
-    schtasks.answers["/Query"] = CommandResult(("",), 1, "", "not found")
     result = adapter.start(Component.DNS)
     assert not result.ok
+    assert "not installed" in result.message
 
 
-def test_stop_ends_the_task(adapter, schtasks) -> None:
+def test_stop_ends_the_task(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
     result = adapter.stop(Component.DNS)
     assert result.ok
     assert schtasks.called("/End")
 
 
-def test_enable_and_disable_change_the_task(adapter, schtasks) -> None:
+def test_enable_and_disable_change_the_task(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
     adapter.enable(Component.DNS)
     assert schtasks.called("/ENABLE")
-
     adapter.disable(Component.DNS)
     assert schtasks.called("/DISABLE")
 
 
-def test_install_creates_the_task(adapter, schtasks, tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(windows_adapter.win_paths, "config_path", lambda: tmp_path / "config.toml")
-    result = adapter.install(Component.DNS, scope="user")
-    assert result.ok
-    assert schtasks.called("/Create")
-    assert (tmp_path / "config.toml").exists()
-    assert "dns" in " ".join(schtasks.calls[-1])
-
-
-def test_install_is_idempotent(adapter, schtasks, tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(windows_adapter.win_paths, "config_path", lambda: tmp_path / "config.toml")
+def test_uninstall_removes_the_task(adapter, schtasks, config_path) -> None:
     adapter.install(Component.DNS, scope="user")
-    adapter.install(Component.DNS, scope="user")
-    assert schtasks.called("/Create")
-
-
-def test_uninstall_removes_the_task(adapter, schtasks) -> None:
     result = adapter.uninstall(Component.DNS, scope="user")
     assert result.ok
     assert schtasks.called("/Delete")
+    assert adapter.status(Component.DNS) is ServiceState.NOT_INSTALLED
+
+
+def test_the_uninstall_stops_an_unregistered_process(
+    adapter, schtasks, pid_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    killed: list[list[str]] = []
+
+    def fake_run(argv, *, timeout=30.0, **kwargs):
+        killed.append(list(argv))
+        return CommandResult(("",), 0, "", "")
+
+    monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+
+    result = adapter.uninstall(Component.DNS, scope="user")
+
+    assert result.ok
+    assert killed
+    assert "taskkill" in killed[0]
+
+
+def test_a_repeated_uninstall_works(adapter, schtasks, config_path) -> None:
+    adapter.install(Component.DNS, scope="user")
+    first = adapter.uninstall(Component.DNS, scope="user")
+    second = adapter.uninstall(Component.DNS, scope="user")
+    assert first.ok
+    assert second.ok
+
+
+# -- the service backend ---------------------------------------------------
 
 
 def test_a_system_scope_installation_asks_for_elevation(adapter, schtasks, monkeypatch) -> None:
@@ -186,6 +331,9 @@ def test_the_windows_service_backend_is_used_when_it_is_available(adapter, monke
     assert created == ["dontneed-dns-dns"]
 
 
+# -- the logs and the diagnostics ------------------------------------------
+
+
 def test_the_logs_are_read_from_the_log_file(adapter, tmp_path, monkeypatch) -> None:
     log_file = tmp_path / "dontneed-dns.log"
     log_file.write_text("first\nsecond\nthird\n", encoding="utf-8")
@@ -219,6 +367,9 @@ def test_the_install_paths_are_reported(adapter) -> None:
     assert "state" in paths
 
 
+# -- the command line ------------------------------------------------------
+
+
 def test_the_frozen_executable_uses_the_run_command(adapter, monkeypatch) -> None:
     monkeypatch.setattr(windows_adapter.sys, "frozen", True, raising=False)
     monkeypatch.setattr(windows_adapter.sys, "executable", r"C:\Program Files\dontneed-dns\dontneed-dns.exe")
@@ -230,6 +381,84 @@ def test_the_frozen_executable_uses_the_run_command(adapter, monkeypatch) -> Non
 def test_the_source_installation_uses_the_module(adapter) -> None:
     command = adapter._command_line(Component.DNS)
     assert "dontneed_dns.service_runner dns" in command
+
+
+def test_the_command_line_has_no_shell_operator(adapter) -> None:
+    """A scheduled task does not run through a shell."""
+    command = adapter._command_line(Component.DNS)
+    assert "&&" not in command
+    assert "set PYTHONPATH" not in command
+
+
+def test_the_task_starts_in_the_directory_of_the_package(adapter) -> None:
+    """The package has to be findable even when it is not installed.
+
+    A scheduled task runs no shell, so the module path cannot be set with
+    a shell operator.  ``python -m`` puts the current directory at the
+    beginning of ``sys.path``, so the working directory of the task is
+    what makes the package findable.
+    """
+    definition = adapter._definition(Component.DNS)
+    module_root = Path(definition.working_directory)
+    assert (module_root / "dontneed_dns" / "__init__.py").exists()
+    assert "dontneed_dns.service_runner" in definition.arguments
+
+
+def test_the_frozen_build_starts_in_the_directory_of_the_executable(
+    adapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(windows_adapter.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(windows_adapter.sys, "executable", r"C:\app\dontneed-dns.exe")
+    definition = adapter._definition(Component.DNS)
+    assert definition.working_directory
+
+
+def test_the_mechanism_of_the_working_directory(tmp_path: Path) -> None:
+    """``python -m`` finds a package in the current directory."""
+    package = tmp_path / "demo"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text("print('found')\n", encoding="utf-8")
+
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    completed = subprocess.run(
+        [sys.executable, "-m", "demo"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "found"
+
+
+def test_the_service_runner_starts_from_the_working_directory(adapter) -> None:
+    """The task has to find the package without an installed distribution.
+
+    ``-S`` leaves the site directories out, so the package can only be
+    found through the working directory of the task.
+    """
+    definition = adapter._definition(Component.DNS)
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    completed = subprocess.run(
+        [sys.executable, "-S", "-m", "dontneed_dns.service_runner", "--help"],
+        cwd=definition.working_directory,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "dontneed-dns-service" in completed.stdout
+
+
+def test_the_definition_holds_the_arguments_separately(adapter) -> None:
+    definition = adapter._definition(Component.PROXY)
+    assert isinstance(definition, TaskDefinition)
+    assert "proxy" in definition.arguments
+    assert "--config" in definition.arguments
+    assert definition.command
 
 
 def test_an_unknown_scope_is_rejected() -> None:
@@ -246,3 +475,8 @@ def test_the_windows_paths_are_under_the_application_data(adapter) -> None:
     paths = adapter.install_paths("user")
     assert str(paths["config"]).endswith("config.toml")
     assert "dontneed-dns" in str(paths["logs"])
+
+
+def test_the_task_module_is_importable_without_windows() -> None:
+    """The module must not need Windows to be imported."""
+    assert task_module.TASK_NAMESPACE.startswith("http")

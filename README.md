@@ -45,7 +45,7 @@ executable:
 | `SHA256SUMS` | - | the checksum of every file |
 
 ```bash
-gh release download v0.1.1 --dir dontneed-dns
+gh release download v0.1.2 --dir dontneed-dns
 cd dontneed-dns && sha256sum -c SHA256SUMS
 ```
 
@@ -224,6 +224,10 @@ More in [docs/security.md](docs/security.md).
 * **A scheduled task starts at the next login.**  A user level background
   process that survives a reboot without a service needs a session.
 * **The Windows executable is not digitally signed.**
+* **A scheduled task of the Windows edition needs the Task Scheduler.**  If
+  the terminal is not allowed to create one, the installation fails with the
+  exact error of `schtasks` and has to be repeated from an elevated
+  PowerShell window.  The configuration is kept.
 
 ## Troubleshooting
 

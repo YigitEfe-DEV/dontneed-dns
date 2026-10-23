@@ -20,7 +20,7 @@ from dontneed_dns.core.constants import (
     DNS_UNIT_NAME,
     PROXY_UNIT_NAME,
 )
-from dontneed_dns.core.system import CommandResult, is_root, run_command, which
+from dontneed_dns.core.system import CommandResult, describe_failure, is_root, run_command, which
 from dontneed_dns.platforms.base import (
     Component,
     OperationResult,
@@ -141,6 +141,19 @@ class LinuxPlatformAdapter(PlatformAdapter):
 
     # -- helpers ----------------------------------------------------------
 
+    def running_pid(self, component: Component) -> int | None:
+        """The process id of a running component, if there is one."""
+        from dontneed_dns.core.paths import pid_file
+
+        path = pid_file(f"dontneed-dns-{component.value}")
+        try:
+            pid = int(path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return None
+        from dontneed_dns.core.system import process_alive
+
+        return pid if process_alive(pid) else None
+
     def _unit_name(self, component: Component) -> str:
         return _UNIT_FILES[component]
 
@@ -173,6 +186,10 @@ class LinuxPlatformAdapter(PlatformAdapter):
 
         load_state = self._systemctl("show", "--property=LoadState", "--value", unit)
         if load_state.ok and load_state.stdout.strip() == "not-found":
+            # A process can run without a unit, for example when it was
+            # started by hand.  That is not an installation.
+            if self.running_pid(component) is not None:
+                return ServiceState.RUNNING_UNREGISTERED
             return ServiceState.NOT_INSTALLED
 
         result = self._systemctl("is-active", unit)
@@ -210,7 +227,7 @@ class LinuxPlatformAdapter(PlatformAdapter):
         result = self._systemctl(action, unit, timeout=60.0)
         if result.ok:
             return OperationResult.success(f"{unit}: {action} succeeded.", changed=True)
-        return OperationResult.failure(f"{unit}: {action} failed.", detail=result.summary())
+        return OperationResult.failure(f"{unit}: {action} failed.", detail=describe_failure(result))
 
     def start(self, component: Component) -> OperationResult:
         """Start ``component``."""
@@ -244,7 +261,9 @@ class LinuxPlatformAdapter(PlatformAdapter):
         result = run_command(argv, timeout=30.0)
         if result.ok:
             return OperationResult.success(f"{unit}: {lines} log lines.", data={"output": result.stdout})
-        return OperationResult.failure(f"{unit}: the logs could not be read.", detail=result.summary())
+        return OperationResult.failure(
+            f"{unit}: the logs could not be read.", detail=describe_failure(result)
+        )
 
     # -- installation -----------------------------------------------------
 
@@ -337,14 +356,14 @@ class LinuxPlatformAdapter(PlatformAdapter):
         reload_result = self._systemctl("daemon-reload", scope=scope)
         if not reload_result.ok:
             return OperationResult.failure(
-                "systemd could not reload the unit files.", detail=reload_result.summary()
+                "systemd could not reload the unit files.", detail=describe_failure(reload_result)
             )
 
         enable_result = self._systemctl("enable", self._unit_name(component), scope=scope)
         if not enable_result.ok:
             return OperationResult.failure(
                 f"{self._unit_name(component)} could not be enabled.",
-                detail=enable_result.summary(),
+                detail=describe_failure(enable_result),
                 changed=changed,
             )
 
@@ -366,6 +385,18 @@ class LinuxPlatformAdapter(PlatformAdapter):
 
         self._systemctl("disable", "--now", unit, scope=scope)
         self._systemctl("stop", unit, scope=scope)
+
+        # A process that runs without a unit belongs to this project as
+        # well and has to be stopped, otherwise it would keep the port.
+        pid = self.running_pid(component)
+        if pid is not None:
+            import signal
+
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            changed = True
 
         unit_path = self._unit_path(component, scope)
         if unit_path.exists():

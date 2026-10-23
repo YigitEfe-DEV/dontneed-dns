@@ -197,3 +197,92 @@ def test_a_busy_port_is_reported_clearly(doh_transport) -> None:
         with pytest.raises(OSError, match="already in use"):
             instance.bind()
         instance.shutdown()
+
+
+@pytest.fixture
+def dual_stack_server(doh_transport):
+    """A DNS server that listens on IPv4 and on IPv6."""
+    transport = doh_transport()
+    provider = DohProvider("test", "192.0.2.1", "dns.test.example")
+    resolver = SplitResolver(
+        DohClient([provider], transport=transport),
+        FakeSystemResolver(),
+        split_domains=("discord.com",),
+    )
+    instance = DnsServer(
+        resolver,
+        host="127.0.0.1",
+        port=0,
+        host_v6="::1",
+        enable_tcp=True,
+    )
+    instance.bind()
+    thread = threading.Thread(target=instance.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.2)
+    try:
+        yield instance
+    finally:
+        instance.shutdown()
+        thread.join(timeout=5)
+
+
+def test_both_address_families_are_listening(dual_stack_server) -> None:
+    """Every family needs its own socket.
+
+    A single socket cannot serve IPv4 and IPv6 at the same time: the
+    second family replaces the first one, which is then closed and its
+    port is released.
+    """
+    hosts = {host for host, _port in dual_stack_server.bound_ports}
+    assert hosts == {"127.0.0.1", "::1"}
+
+
+def test_a_tcp_query_over_ipv4_is_answered(dual_stack_server) -> None:
+    """A client that receives a truncated answer retries over TCP."""
+    response = tcp_query(dual_stack_server.port, build_query("discord.com"))
+    parsed = parse_message(response)
+    assert parsed.header.rcode == 0
+    assert parsed.header.ancount == 1
+    assert parsed.question is not None
+    assert parsed.question.name == "discord.com"
+
+
+def test_a_tcp_query_over_ipv6_is_answered(dual_stack_server) -> None:
+    port = dual_stack_server.port
+    with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as sock:
+        sock.settimeout(5)
+        sock.connect(("::1", port))
+        query = build_query("discord.com")
+        sock.sendall(struct.pack("!H", len(query)) + query)
+        length = struct.unpack("!H", sock.recv(2))[0]
+        buffer = bytearray()
+        while len(buffer) < length:
+            buffer.extend(sock.recv(length - len(buffer)))
+
+    parsed = parse_message(bytes(buffer))
+    assert parsed.header.rcode == 0
+    assert parsed.header.ancount == 1
+
+
+def test_a_udp_query_still_works_with_both_families(dual_stack_server) -> None:
+    response = udp_query(dual_stack_server.port, build_query("discord.com"))
+    assert parse_message(response).header.ancount == 1
+
+
+def test_the_ipv4_tcp_port_stays_bound(dual_stack_server) -> None:
+    """The IPv4 TCP listener must not be closed by the IPv6 listener."""
+    port = dual_stack_server.port
+    with socket.create_connection(("127.0.0.1", port), timeout=5):
+        pass
+
+
+def test_the_health_check_sees_the_tcp_listener(dual_stack_server) -> None:
+    """The health check connects over TCP, so it needs the TCP listener."""
+    from dontneed_dns.core.config import Config, DnsConfig
+    from dontneed_dns.core.health import run_health_checks
+
+    config = Config(dns=DnsConfig(listen_host="127.0.0.1", listen_port=dual_stack_server.port))
+    checks = {check.name: check for check in run_health_checks(config, timeout=3.0)}
+
+    assert checks["DNS listener"].ok, checks["DNS listener"].detail
