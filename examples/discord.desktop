@@ -1,0 +1,16 @@
+[Desktop Entry]
+# Example of a desktop entry that starts Discord through the local proxy.
+#
+# Copy it to ~/.local/share/applications/ and adjust the paths.
+#
+# The proxy variables only exist in the environment of the started process;
+# no system wide setting is changed.
+Type=Application
+Name=Discord
+GenericName=Internet Messenger
+Comment=Chat, voice and video
+Exec=env http_proxy=http://127.0.0.1:10808 https_proxy=http://127.0.0.1:10808 all_proxy=http://127.0.0.1:10808 discord --proxy-server=socks5://127.0.0.1:10808
+Icon=discord
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=discord

@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check the formatting
+        run: ruff format --check src/ tests/
+
+      - name: Run the linter
+        run: ruff check src/ tests/
+
+  test-linux:
+    name: Tests (Linux, ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Report the coverage
+        run: pytest tests/ --cov=dontneed_dns --cov-report=xml --cov-report=term
+
+      - name: Check that the command line interface works
+        run: |
+          dontneed-dns version
+          dontneed-dns --help
+          dontneed-dns config validate
+          dontneed-dns status || true
+
+  test-windows:
+    name: Tests (Windows, ${{ matrix.python-version }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Report the coverage
+        run: pytest tests/ --cov=dontneed_dns --cov-report=xml --cov-report=term
+
+      - name: Check that the command line interface works
+        shell: pwsh
+        run: |
+          dontneed-dns version
+          dontneed-dns --help
+          dontneed-dns config validate
+          dontneed-dns status
+
+  service-integration:
+    name: systemd units (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Install the user services and check that they can be started
+        run: |
+          dontneed-dns install --scope user --yes
+          dontneed-dns dns start
+          dontneed-dns proxy start
+          sleep 5
+          dontneed-dns status
+          dontneed-dns check || true
+          dontneed-dns logs -n 20
+          dontneed-dns uninstall --scope user --yes

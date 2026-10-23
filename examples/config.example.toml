@@ -1,0 +1,90 @@
+# dontneed-dns - example configuration
+#
+# Copy this file to the location printed by "dontneed-dns config path" and
+# adjust it.  Every option is validated; an unknown option is an error so
+# that a typo cannot silently disable a feature.
+
+[dns]
+# The loopback interface the resolver listens on.
+listen_host = "127.0.0.1"
+listen_port = 5354
+
+# The domains that are resolved over DNS-over-HTTPS.  Every other domain is
+# forwarded to the system resolver, so the rest of the system is unaffected.
+split_domains = ["discord.com", "discordapp.com", "discord.gg", "dis.gd", "discord.dev"]
+
+# The DNS-over-HTTPS providers, tried in this order.
+# Known names: cloudflare, google, quad9
+doh_providers = ["cloudflare", "google", "quad9"]
+
+# The timeout of a single upstream attempt in seconds and the number of
+# retries.  The total runtime of one query is bounded by timeout * (retries+1).
+timeout = 3.0
+retries = 1
+
+# Whether the queries that are not routed over DoH are forwarded to the
+# system resolver.  Turning this off makes the resolver a DoH only server.
+system_fallback = true
+
+# Whether the resolver also speaks DNS over TCP.
+tcp_enabled = true
+
+# How many requests are processed at the same time.
+max_concurrency = 64
+
+
+[proxy]
+listen_host = "127.0.0.1"
+listen_port = 10808
+
+# The protocols the proxy accepts.  At least one of them has to be enabled.
+enable_socks5 = true
+enable_http_connect = true
+
+# Whether the proxy resolves the requested host over DNS-over-HTTPS instead
+# of handing the name to the system resolver.
+resolve_via_doh = true
+
+# Whether the system resolver may be used when DNS-over-HTTPS is not
+# available.  Turning this off means a host that cannot be resolved over
+# DoH is not connected to at all.
+allow_system_dns_fallback = true
+
+# EXPERIMENTAL: splitting the TLS ClientHello into small pieces.  It changes
+# only the packet boundaries, never the encrypted payload, and it cannot be
+# verified against a specific middlebox from inside this project.
+fragmentation_enabled = false
+fragment_chunk_size = 16
+fragment_preamble_delay_ms = 50
+fragment_chunk_delay_ms = 10
+
+# The timeout of the connection to the target and how long a connection may
+# stay idle before it is closed.
+connect_timeout = 5.0
+idle_timeout = 300.0
+handshake_timeout = 15.0
+
+# How many connections are relayed at the same time.
+max_connections = 256
+
+
+[service]
+# "user" needs no privileges at all.  "system" installs a service for the
+# whole machine and requires root (Linux) or administrator rights (Windows).
+scope = "user"
+
+# Whether the components start automatically after they were installed.
+autostart = false
+
+
+[logging]
+# debug, info, warning, error or critical
+level = "info"
+
+# An optional log file.  The service manager of the platform is used when
+# this is not set.
+# file = "/home/user/.local/state/dontneed-dns/logs/dontneed-dns.log"
+
+# Whether the home directory, the user name, the host name, mail addresses,
+# tokens and globally routable addresses are removed from the log.
+redact = true

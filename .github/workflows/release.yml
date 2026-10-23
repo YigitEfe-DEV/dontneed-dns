@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version of the release, for example 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build the Linux archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build ruff
+
+      - name: Check the formatting and the linter
+        run: |
+          ruff format --check src/ tests/
+          ruff check src/ tests/
+
+      - name: Run the tests
+        run: |
+          pip install -e ".[dev]"
+          pytest tests/ -q
+
+      - name: Build the archive
+        run: python scripts/build_release.py --platform linux --output dist
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: dontneed-dns-linux-x86_64
+          path: dist/dontneed-dns-linux-x86_64.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: Build the Windows archive and the executable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build ruff pyinstaller
+
+      - name: Check the formatting and the linter
+        run: |
+          ruff format --check src/ tests/
+          ruff check src/ tests/
+
+      - name: Run the tests
+        run: |
+          pip install -e ".[dev]"
+          pytest tests/ -q
+
+      - name: Build the executable
+        run: |
+          pyinstaller --noconfirm --clean --onefile --console `
+            --name dontneed-dns `
+            --collect-all dontneed_dns `
+            --collect-all textual `
+            --collect-all typer `
+            --collect-all rich `
+            src/dontneed_dns/__main__.py
+
+      - name: Check that the executable starts
+        shell: pwsh
+        run: |
+          & dist\dontneed-dns.exe version
+          if ($LASTEXITCODE -ne 0) { throw "the executable did not start" }
+
+      - name: Assemble the archive
+        run: python scripts/build_release.py --platform windows --output dist --executable dist/dontneed-dns.exe
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: dontneed-dns-windows-x86_64
+          path: |
+            dist/dontneed-dns-windows-x86_64.zip
+            dist/dontneed-dns.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute the checksums
+        run: |
+          cd dist
+          sha256sum *.zip *.exe > SHA256SUMS 2>/dev/null || sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Verify the archives
+        run: |
+          python scripts/verify_release.py dist
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
