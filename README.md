@@ -32,6 +32,27 @@ Nothing is shared between them except the protocol code.
 macOS and every other operating system are not supported.  The tool refuses
 to run there instead of pretending to work.
 
+## Releases
+
+Every release contains two archives and, for Windows, the self contained
+executable:
+
+| Asset | Size | Runtime requirement |
+| --- | --- | --- |
+| `dontneed-dns-linux-x86_64.zip` | ~2.7 MB | Python 3.11 or newer (the installer creates a virtual environment) |
+| `dontneed-dns-windows-x86_64.zip` | ~18 MB | none (the archive contains the executable) |
+| `dontneed-dns.exe` | ~16 MB | none |
+| `SHA256SUMS` | - | the checksum of every file |
+
+```bash
+gh release download v0.1.0 --dir dontneed-dns
+cd dontneed-dns && sha256sum -c SHA256SUMS
+```
+
+The Windows executable is **not digitally signed**.  Windows shows a
+warning the first time it is started; compare the checksum before doing
+anything about it.
+
 ## Feature comparison
 
 | Feature | Linux | Windows |
