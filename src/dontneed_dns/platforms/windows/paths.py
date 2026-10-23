@@ -11,6 +11,7 @@ import os
 import sys
 from pathlib import Path
 
+from dontneed_dns.core import paths as core_paths
 from dontneed_dns.core.constants import APP_DIR_NAME
 
 __all__ = [
@@ -77,13 +78,18 @@ def log_path() -> Path:
 
 
 def state_dir() -> Path:
-    """The directory holding runtime state such as the PID file."""
-    return local_app_data() / APP_DIR_NAME / "state"
+    """The directory holding runtime state such as the PID file.
+
+    The core module decides where the state lives, because the service
+    runner writes the PID file and this module reads it.  Two definitions
+    would silently disagree and the state would never be found.
+    """
+    return core_paths.data_dir()
 
 
 def pid_file(name: str = "dontneed-dns") -> Path:
     """The PID file of a component."""
-    return state_dir() / f"{name}.pid"
+    return core_paths.pid_file(name)
 
 
 def python_executable() -> str:

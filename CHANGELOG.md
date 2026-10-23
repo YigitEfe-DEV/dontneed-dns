@@ -38,6 +38,13 @@ makes the state of the installation consistent on both platforms.
 - The temporary file of the task definition is closed before it is deleted.
   Windows refuses to delete a file that is still open, so the file was left
   behind and its descriptor leaked.
+- The Windows edition looks for the PID file where the service runner writes
+  it.  The two modules used different directories, so a running component
+  was never noticed, the status showed "Stopped" and the uninstall never
+  stopped the process.
+- The principal of a task is compared with the account of the current user
+  in both forms.  The Task Scheduler stores it as a SID, so a correctly
+  created task was reported as a task of a different account.
 - The source installation of the Windows edition works again.  The task
   starts in the directory of the package, which `python -m` puts at the
   beginning of `sys.path`, so the package is found even when it is not

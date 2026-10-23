@@ -216,6 +216,27 @@ def test_a_dead_process_leaves_no_trace(adapter, schtasks, pid_path) -> None:
     assert adapter.status(Component.DNS) is ServiceState.NOT_INSTALLED
 
 
+def test_the_running_process_is_found_at_the_path_of_the_service_runner(
+    adapter, schtasks, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader and the writer of the PID file have to use the same path.
+
+    The service runner writes the PID file with the core module, so the
+    adapter has to look for it there.  Two different paths would mean that
+    a running component is never noticed.
+    """
+    from dontneed_dns.core import paths as core_paths
+
+    pid_file = core_paths.pid_file("dontneed-dns-dns")
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        assert adapter.running_pid(Component.DNS) == os.getpid()
+        assert adapter.status(Component.DNS) is ServiceState.RUNNING_UNREGISTERED
+    finally:
+        pid_file.unlink()
+
+
 def test_the_autostart_state_is_read_from_the_task_xml(adapter, schtasks, config_path) -> None:
     adapter.install(Component.DNS, scope="user")
     assert adapter.is_enabled(Component.DNS) is True

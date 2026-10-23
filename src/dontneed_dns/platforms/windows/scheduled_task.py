@@ -23,6 +23,7 @@ the PID file the service runner writes, because the human readable output of
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
@@ -107,6 +108,70 @@ def current_user_id() -> str:
     if domain and domain.lower() != user.lower():
         return f"{domain}\\{user}"
     return user
+
+
+def current_user_sid() -> str | None:
+    """The SID of the current user, or ``None`` when it cannot be read.
+
+    The Task Scheduler stores the principal of a task as a SID, so the
+    account name that was asked for comes back as the identifier of the
+    user.  Comparing the two needs the SID of the current user.
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    except Exception:  # noqa: BLE001 - not Windows or no access
+        return None
+
+    token_query = 0x0008
+    token_user = 1
+    try:
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), token_query, ctypes.byref(token)):
+            return None
+
+        size = wintypes.DWORD()
+        advapi32.GetTokenInformation(token, token_user, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+
+        buffer = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(token, token_user, buffer, size, ctypes.byref(size)):
+            return None
+
+        # TOKEN_USER holds a SID_AND_ATTRIBUTES whose first member is the SID.
+        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]
+        text = ctypes.c_wchar_p()
+        if not advapi32.ConvertSidToStringSidW(ctypes.c_void_p(sid), ctypes.byref(text)):
+            return None
+        try:
+            return text.value
+        finally:
+            kernel32.LocalFree(text)
+    except Exception:  # noqa: BLE001 - the check is optional
+        return None
+
+
+def _same_user(task_user: str, expected: str) -> bool:
+    """Whether the principal of a task is the expected account.
+
+    The task stores either the account name or the SID of the user, so
+    both forms have to be accepted.
+    """
+    if task_user.lower() == expected.lower():
+        return True
+    sid = current_user_sid()
+    if sid is None:
+        # The task stores a SID and the SID of this user is unknown, so the
+        # account cannot be compared.  A wrong guess would report a correct
+        # installation as a failure.
+        return task_user.upper().startswith("S-1-")
+    return task_user.upper() == sid.upper()
 
 
 def _escape(value: str) -> str:
@@ -324,7 +389,7 @@ class ScheduledTaskBackend:
             problems.append(f"the command is {command!r} instead of {definition.command!r}")
         if arguments != definition.arguments:
             problems.append(f"the arguments are {arguments!r} instead of {definition.arguments!r}")
-        if definition.user_id and user and user.lower() != definition.user_id.lower():
+        if definition.user_id and user and not _same_user(user, definition.user_id):
             problems.append(f"the task belongs to {user!r} instead of {definition.user_id!r}")
         if (
             check_working_directory

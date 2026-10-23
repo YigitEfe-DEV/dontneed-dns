@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,9 +25,26 @@ def test_the_logs_live_in_the_local_directory(monkeypatch: pytest.MonkeyPatch) -
     assert win_paths.log_dir() == Path(r"C:\Users\tester\AppData\Local") / "dontneed-dns" / "logs"
 
 
-def test_the_state_lives_in_the_local_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_state_directory_comes_from_the_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Windows module must not define the location on its own."""
+    from dontneed_dns.core import paths as core_paths
+
+    assert win_paths.state_dir() == core_paths.data_dir()
+
+
+def test_the_state_lives_in_the_local_directory_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dontneed_dns.core import paths as core_paths
+
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")
-    assert win_paths.state_dir() == Path(r"C:\Users\tester\AppData\Local") / "dontneed-dns" / "state"
+    assert core_paths.data_dir() == Path(r"C:\Users\tester\AppData\Local") / "dontneed-dns"
+
+
+def test_the_pid_file_is_the_one_of_the_service_runner() -> None:
+    """The reader and the writer of the PID file have to agree."""
+    from dontneed_dns.core import paths as core_paths
+
+    assert win_paths.pid_file("dontneed-dns-dns") == core_paths.pid_file("dontneed-dns-dns")
 
 
 def test_the_program_data_directory_is_used_for_system_scope(

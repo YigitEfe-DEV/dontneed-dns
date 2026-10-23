@@ -164,6 +164,21 @@ def test_a_task_with_the_wrong_arguments_is_reported(schtasks) -> None:
     assert "arguments" in verification.detail
 
 
+def test_the_account_of_a_task_is_compared_with_the_sid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows stores the principal of a task as a SID."""
+    monkeypatch.setattr(task_module, "current_user_sid", lambda: "S-1-5-21-1-2-3-500")
+    assert task_module._same_user("S-1-5-21-1-2-3-500", "RUNNERADMIN") is True
+    assert task_module._same_user("S-1-5-21-9-9-9-500", "RUNNERADMIN") is False
+    assert task_module._same_user("RUNNERADMIN", "RUNNERADMIN") is True
+
+
+def test_an_unknown_sid_is_not_reported_as_a_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without the SID of the current user the account cannot be compared."""
+    monkeypatch.setattr(task_module, "current_user_sid", lambda: None)
+    assert task_module._same_user("S-1-5-21-1-2-3-500", "RUNNERADMIN") is True
+    assert task_module._same_user("OTHER", "RUNNERADMIN") is False
+
+
 def test_a_task_of_another_user_is_reported(schtasks) -> None:
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", user_id="ATALYY\\Excalibur")
