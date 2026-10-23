@@ -23,6 +23,7 @@ from dontneed_dns.core.dnsmessage import build_error_response, parse_message
 from dontneed_dns.core.errors import DNSProtocolError
 from dontneed_dns.core.logging_setup import get_logger
 from dontneed_dns.core.resolver import SplitResolver
+from dontneed_dns.core.system import port_in_use
 
 __all__ = ["DnsServer"]
 
@@ -75,6 +76,11 @@ class DnsServer:
 
     def bind(self) -> None:
         """Open the listening sockets. Raises ``OSError`` when the port is busy."""
+        if self._requested_port != 0 and port_in_use(self.host, self._requested_port):
+            raise OSError(
+                f"the port {self._requested_port} on {self.host} is already in use; "
+                "another instance of the resolver is probably running"
+            )
         self._executor = ThreadPoolExecutor(max_workers=self.max_concurrency, thread_name_prefix="dns")
         try:
             self._bind_family(self.host)

@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dontneed_dns.core.config import ProxyConfig
 from dontneed_dns.core.logging_setup import get_logger
 from dontneed_dns.core.resolver import SplitResolver
+from dontneed_dns.core.system import port_in_use
 from dontneed_dns.proxy import http_connect, socks5
 from dontneed_dns.proxy.fragmentation import FragmentationSettings, TlsFragmenter
 
@@ -68,6 +69,11 @@ class ProxyServer:
 
     def bind(self) -> None:
         """Open the listening socket."""
+        if port_in_use(self.config.listen_host, self.config.listen_port):
+            raise OSError(
+                f"the port {self.config.listen_port} on {self.config.listen_host} is already in use; "
+                "another instance of the proxy is probably running"
+            )
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, self.config.max_connections), thread_name_prefix="proxy"
         )

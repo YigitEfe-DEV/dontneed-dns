@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -26,6 +27,7 @@ __all__ = [
     "is_linux",
     "is_root",
     "is_windows",
+    "port_in_use",
     "process_alive",
     "run_command",
     "which",
@@ -143,6 +145,24 @@ def process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
+    return True
+
+
+def port_in_use(host: str, port: int, *, timeout: float = 0.5) -> bool:
+    """Return ``True`` when something already accepts connections on the address.
+
+    Windows allows two sockets to bind the same address because
+    ``SO_REUSEADDR`` is not as restrictive there as on Linux, so a second
+    instance would silently take the port over.  Connecting to the address
+    detects that situation on every platform.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.settimeout(timeout)
+            probe.connect((host, port))
     except OSError:
         return False
     return True

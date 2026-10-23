@@ -153,7 +153,6 @@ def test_a_busy_port_is_reported_clearly(doh_transport) -> None:
     )
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
-        taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         taken.bind(("127.0.0.1", 0))
         taken.listen(1)
         port = taken.getsockname()[1]
@@ -165,6 +164,6 @@ def test_a_busy_port_is_reported_clearly(doh_transport) -> None:
             host_v6=None,
             enable_tcp=True,
         )
-        with pytest.raises(OSError, match="could not be opened"):
+        with pytest.raises(OSError, match="already in use"):
             instance.bind()
         instance.shutdown()
