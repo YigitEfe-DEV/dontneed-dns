@@ -26,6 +26,9 @@ from dontneed_dns.core.resolver import SplitResolver
 
 __all__ = ["DnsServer"]
 
+#: How often a free port is tried when the operating system chooses it.
+EPHEMERAL_PORT_ATTEMPTS = 8
+
 _LOGGER = get_logger("dns.server")
 
 
@@ -46,6 +49,10 @@ class DnsServer:
         self.resolver = resolver
         self.host = host
         self.port = port
+        # The port that was asked for; 0 means "the operating system picks
+        # one".  It is kept apart from ``port`` so that a retry can ask for
+        # another ephemeral port.
+        self._requested_port = port
         self.host_v6 = host_v6
         self.enable_tcp = enable_tcp
         self.max_concurrency = max(1, max_concurrency)
@@ -70,22 +77,62 @@ class DnsServer:
         """Open the listening sockets. Raises ``OSError`` when the port is busy."""
         self._executor = ThreadPoolExecutor(max_workers=self.max_concurrency, thread_name_prefix="dns")
         try:
-            self._bind_udp(self.host)
+            self._bind_family(self.host)
             if self.host_v6:
                 try:
-                    self._bind_udp(self.host_v6)
+                    self._bind_family(self.host_v6)
                 except OSError as exc:
-                    _LOGGER.warning("IPv6 listener unavailable on %s: %s", self.host_v6, exc)
-            if self.enable_tcp:
-                self._bind_tcp(self.host)
-                if self.host_v6:
-                    try:
-                        self._bind_tcp(self.host_v6)
-                    except OSError as exc:
-                        _LOGGER.warning("IPv6 TCP listener unavailable on %s: %s", self.host_v6, exc)
+                    _LOGGER.warning("the IPv6 listener is not available on %s: %s", self.host_v6, exc)
+        except OSError as exc:
+            self.close()
+            raise OSError(f"the DNS listener could not be opened on {self.host}:{self.port}: {exc}") from exc
         except Exception:
             self.close()
             raise
+
+    def _bind_family(self, host: str) -> None:
+        """Bind the UDP and the TCP listener of one address family.
+
+        Both protocols have to use the same port: a client that receives a
+        truncated answer retries over TCP at the same port.
+
+        When the operating system chooses the port, the choice can land in
+        a range that is reserved for the other protocol (Windows reserves
+        parts of the dynamic range), so the pair is tried again with
+        another port.
+        """
+        attempts = EPHEMERAL_PORT_ATTEMPTS if self._requested_port == 0 else 1
+        last_error: OSError | None = None
+        for attempt in range(attempts):
+            self.port = self._requested_port
+            try:
+                self._bind_udp(host)
+                if self.enable_tcp:
+                    self._bind_tcp(host)
+                return
+            except OSError as exc:
+                last_error = exc
+                self._close_sockets()
+                if attempt < attempts - 1:
+                    _LOGGER.debug("the port %s could not be used for both protocols: %s", self.port, exc)
+        assert last_error is not None
+        raise last_error
+
+    def _close_sockets(self) -> None:
+        """Close the sockets that were opened so far."""
+        for sock in self._udp_sockets:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        self._udp_sockets.clear()
+        if self._tcp_socket is not None:
+            try:
+                self._tcp_socket.close()
+            except OSError:
+                pass
+            self._tcp_socket = None
+        self._bound_ports.clear()
 
     def _bind_udp(self, host: str) -> None:
         family = socket.AF_INET6 if ":" in host else socket.AF_INET

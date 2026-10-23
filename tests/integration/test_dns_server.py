@@ -140,3 +140,31 @@ def test_the_server_releases_its_ports_on_shutdown(server) -> None:
     time.sleep(0.3)
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=2)
+
+
+def test_a_busy_port_is_reported_clearly(doh_transport) -> None:
+    """The error message names the address that could not be opened."""
+    transport = doh_transport()
+    provider = DohProvider("test", "192.0.2.1", "dns.test.example")
+    resolver = SplitResolver(
+        DohClient([provider], transport=transport),
+        FakeSystemResolver(),
+        split_domains=("discord.com",),
+    )
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        taken.bind(("127.0.0.1", 0))
+        taken.listen(1)
+        port = taken.getsockname()[1]
+
+        instance = DnsServer(
+            resolver,
+            host="127.0.0.1",
+            port=port,
+            host_v6=None,
+            enable_tcp=True,
+        )
+        with pytest.raises(OSError, match="could not be opened"):
+            instance.bind()
+        instance.shutdown()
