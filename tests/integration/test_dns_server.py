@@ -142,6 +142,36 @@ def test_the_server_releases_its_ports_on_shutdown(server) -> None:
         socket.create_connection(("127.0.0.1", port), timeout=2)
 
 
+def test_both_protocols_use_the_same_port(server) -> None:
+    """A client that retries over TCP needs the same port."""
+    ports = {port for _host, port in server.bound_ports}
+    assert len(ports) == 1
+
+
+def test_the_ipv6_listener_uses_the_same_port(doh_transport) -> None:
+    """The IPv6 listener has to use the port of the IPv4 listener."""
+    if not socket.has_ipv6:
+        pytest.skip("this machine has no IPv6 support")
+
+    transport = doh_transport()
+    provider = DohProvider("test", "192.0.2.1", "dns.test.example")
+    resolver = SplitResolver(
+        DohClient([provider], transport=transport),
+        FakeSystemResolver(),
+        split_domains=("discord.com",),
+    )
+    instance = DnsServer(resolver, host="127.0.0.1", port=0, host_v6="::1", enable_tcp=True)
+    try:
+        instance.bind()
+    except OSError as exc:
+        pytest.skip(f"the IPv6 listener is not available here: {exc}")
+    try:
+        ports = {port for _host, port in instance.bound_ports}
+        assert len(ports) == 1
+    finally:
+        instance.shutdown()
+
+
 def test_a_busy_port_is_reported_clearly(doh_transport) -> None:
     """The error message names the address that could not be opened."""
     transport = doh_transport()

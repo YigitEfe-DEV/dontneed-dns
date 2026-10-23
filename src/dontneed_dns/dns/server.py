@@ -83,10 +83,10 @@ class DnsServer:
             )
         self._executor = ThreadPoolExecutor(max_workers=self.max_concurrency, thread_name_prefix="dns")
         try:
-            self._bind_family(self.host)
+            chosen = self._bind_family(self.host, self._requested_port)
             if self.host_v6:
                 try:
-                    self._bind_family(self.host_v6)
+                    self._bind_family(self.host_v6, chosen)
                 except OSError as exc:
                     _LOGGER.warning("the IPv6 listener is not available on %s: %s", self.host_v6, exc)
         except OSError as exc:
@@ -96,31 +96,49 @@ class DnsServer:
             self.close()
             raise
 
-    def _bind_family(self, host: str) -> None:
+    def _bind_family(self, host: str, port: int) -> int:
         """Bind the UDP and the TCP listener of one address family.
 
         Both protocols have to use the same port: a client that receives a
         truncated answer retries over TCP at the same port.
 
-        When the operating system chooses the port, the choice can land in
-        a range that is reserved for the other protocol (Windows reserves
-        parts of the dynamic range), so the pair is tried again with
-        another port.
+        The TCP socket is opened first on purpose.  When the operating
+        system chooses the port, it then picks one that is valid for TCP;
+        Windows reserves parts of the dynamic range for TCP and a reserved
+        port cannot be bound at all.  The UDP socket is bound to the port
+        that was chosen for TCP.
+
+        Returns the port the family listens on.
         """
-        attempts = EPHEMERAL_PORT_ATTEMPTS if self._requested_port == 0 else 1
+        attempts = EPHEMERAL_PORT_ATTEMPTS if port == 0 else 1
         last_error: OSError | None = None
         for attempt in range(attempts):
-            self.port = self._requested_port
+            opened: list[socket.socket] = []
             try:
-                self._bind_udp(host)
+                chosen = port
                 if self.enable_tcp:
-                    self._bind_tcp(host)
-                return
+                    tcp_socket, chosen = self._open_tcp(host, port)
+                    opened.append(tcp_socket)
+                udp_socket, _ = self._open_udp(host, chosen)
+                opened.append(udp_socket)
             except OSError as exc:
                 last_error = exc
-                self._close_sockets()
+                for sock in opened:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
                 if attempt < attempts - 1:
-                    _LOGGER.debug("the port %s could not be used for both protocols: %s", self.port, exc)
+                    _LOGGER.debug("the port could not be used for both protocols: %s", exc)
+                continue
+
+            self._udp_sockets.append(opened[-1])
+            if self.enable_tcp:
+                self._tcp_socket = opened[0]
+            self.port = chosen
+            self._bound_ports.append((host, chosen))
+            _LOGGER.info("DNS listener ready on %s:%d (UDP and TCP)", host, chosen)
+            return chosen
         assert last_error is not None
         raise last_error
 
@@ -140,7 +158,8 @@ class DnsServer:
             self._tcp_socket = None
         self._bound_ports.clear()
 
-    def _bind_udp(self, host: str) -> None:
+    def _open_udp(self, host: str, port: int) -> tuple[socket.socket, int]:
+        """Open the UDP socket of one address family."""
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -149,17 +168,16 @@ class DnsServer:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             except OSError:
                 pass
-        sock.bind((host, self.port))
-        sock.settimeout(0.5)
-        self._udp_sockets.append(sock)
-        bound = sock.getsockname()[:2]
-        self._bound_ports.append(bound)
-        # Port 0 asks the operating system for a free port; the TCP listener
-        # has to use the same one.
-        self.port = bound[1]
-        _LOGGER.info("DNS listener ready on %s:%d (UDP)", host, bound[1])
+        try:
+            sock.bind((host, port))
+            sock.settimeout(0.5)
+        except OSError:
+            sock.close()
+            raise
+        return sock, sock.getsockname()[1]
 
-    def _bind_tcp(self, host: str) -> None:
+    def _open_tcp(self, host: str, port: int) -> tuple[socket.socket, int]:
+        """Open the TCP socket of one address family."""
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -168,13 +186,14 @@ class DnsServer:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             except OSError:
                 pass
-        sock.bind((host, self.port))
-        sock.listen(64)
-        sock.settimeout(0.5)
-        self._tcp_socket = sock
-        bound = sock.getsockname()[:2]
-        self._bound_ports.append(bound)
-        _LOGGER.info("DNS listener ready on %s:%d (TCP)", host, bound[1])
+        try:
+            sock.bind((host, port))
+            sock.listen(64)
+            sock.settimeout(0.5)
+        except OSError:
+            sock.close()
+            raise
+        return sock, sock.getsockname()[1]
 
     def serve_forever(self) -> None:
         """Run the server until :meth:`shutdown` is called."""
