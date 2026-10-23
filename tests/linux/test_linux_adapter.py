@@ -7,6 +7,7 @@ to every failure.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,13 @@ from dontneed_dns.platforms import linux
 from dontneed_dns.platforms.base import Component, ServiceState
 from dontneed_dns.platforms.linux.adapter import LinuxPlatformAdapter
 
-pytestmark = pytest.mark.linux
+pytestmark = [
+    pytest.mark.linux,
+    pytest.mark.skipif(
+        not sys.platform.startswith("linux"),
+        reason="the Linux edition is only tested on Linux",
+    ),
+]
 
 
 class FakeSystemctl:
@@ -199,7 +206,7 @@ def test_uninstall_does_not_touch_the_other_component(adapter, systemctl, tmp_pa
 
 
 def test_a_system_scope_installation_without_root_asks_for_elevation(adapter, systemctl, monkeypatch) -> None:
-    monkeypatch.setattr(linux.adapter.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(linux.adapter, "is_root", lambda: False)
     result = adapter.install(Component.DNS, scope="system")
     assert not result.ok
     assert result.requires_elevation
@@ -208,7 +215,7 @@ def test_a_system_scope_installation_without_root_asks_for_elevation(adapter, sy
 def test_a_system_scope_uninstallation_without_root_asks_for_elevation(
     adapter, systemctl, monkeypatch
 ) -> None:
-    monkeypatch.setattr(linux.adapter.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(linux.adapter, "is_root", lambda: False)
     result = adapter.uninstall(Component.DNS, scope="system")
     assert not result.ok
     assert result.requires_elevation

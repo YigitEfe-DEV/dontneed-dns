@@ -20,7 +20,7 @@ from dontneed_dns.core.constants import (
     DNS_UNIT_NAME,
     PROXY_UNIT_NAME,
 )
-from dontneed_dns.core.system import CommandResult, run_command, which
+from dontneed_dns.core.system import CommandResult, is_root, run_command, which
 from dontneed_dns.platforms.base import (
     Component,
     OperationResult,
@@ -156,7 +156,7 @@ class LinuxPlatformAdapter(PlatformAdapter):
         return run_command(argv, timeout=timeout)
 
     def _require_root(self, action: str) -> OperationResult | None:
-        if os.geteuid() == 0:  # type: ignore[attr-defined]
+        if is_root():
             return None
         return OperationResult.needs_elevation(
             f"{action} needs root privileges on this system.",
