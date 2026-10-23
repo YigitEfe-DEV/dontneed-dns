@@ -176,7 +176,7 @@ jobs:
         run: |
           Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           $package = "package/dontneed-dns-windows-x86_64"
-          .\$package\install.ps1
+          & (Join-Path $package 'install.ps1')
           foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
             schtasks /Query /TN $task /FO LIST /V
             if ($LASTEXITCODE -ne 0) { throw "the task $task does not exist" }
@@ -212,7 +212,7 @@ jobs:
         run: |
           Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
           $package = "package/dontneed-dns-windows-x86_64"
-          .\$package\uninstall.ps1
+          & (Join-Path $package 'uninstall.ps1')
           foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
             schtasks /Query /TN $task
             if ($LASTEXITCODE -eq 0) { throw "the task $task still exists" }

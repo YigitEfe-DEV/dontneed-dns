@@ -82,14 +82,20 @@ function Invoke-Native {
     )
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 0
     try {
         $output = & $FilePath @Arguments 2>&1
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
     }
+    # A program that cannot be started at all leaves the exit code of an
+    # earlier command in place and reports an error record.
     foreach ($line in $output) {
         Write-Note "    $line"
+        if ($line -is [System.Management.Automation.ErrorRecord] -and $code -eq 0) {
+            $code = 1
+        }
     }
     return @{ Output = ($output | Out-String).Trim(); ExitCode = $code }
 }

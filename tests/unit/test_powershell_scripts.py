@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,15 @@ PACKAGING = PROJECT_ROOT / "packaging"
 PWSH = shutil.which("pwsh") or shutil.which("powershell")
 
 pytestmark = pytest.mark.skipif(PWSH is None, reason="PowerShell is not available")
+
+# The stand in for the executable is a POSIX shell script, so the tests that
+# execute the scripts cannot run on Windows.  The syntax of the scripts is
+# checked everywhere, and the real installation is checked by the workflow
+# that installs the project on a Windows runner.
+posix_only = pytest.mark.skipif(
+    sys.platform.startswith("win"),
+    reason="the stand in for the executable is a POSIX shell script",
+)
 
 
 def _run_script(script: Path, arguments: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -96,6 +106,7 @@ def test_the_installation_scripts_parse() -> None:
     assert "syntax ok" in completed.stdout
 
 
+@posix_only
 def test_the_installation_fails_with_the_exact_error(tmp_path: Path, windows_env) -> None:
     """The reason of a failure has to reach the user."""
     package = _package(tmp_path, exit_code=1, message="Access is denied.")
@@ -110,6 +121,7 @@ def test_the_installation_fails_with_the_exact_error(tmp_path: Path, windows_env
     assert "elevated" in output
 
 
+@posix_only
 def test_the_installation_writes_a_log_file(tmp_path: Path, windows_env) -> None:
     """The output of the installation has to be kept for a bug report."""
     package = _package(tmp_path, exit_code=1, message="Access is denied.")
@@ -123,6 +135,7 @@ def test_the_installation_writes_a_log_file(tmp_path: Path, windows_env) -> None
     assert "Access is denied" in content
 
 
+@posix_only
 def test_a_successful_installation_is_reported(tmp_path: Path, windows_env) -> None:
     package = _package(tmp_path)
 
@@ -134,6 +147,7 @@ def test_a_successful_installation_is_reported(tmp_path: Path, windows_env) -> N
     assert installed.exists()
 
 
+@posix_only
 def test_the_uninstall_removes_the_installation(tmp_path: Path, windows_env) -> None:
     package = _package(tmp_path)
 

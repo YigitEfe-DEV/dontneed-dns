@@ -91,6 +91,27 @@ def test_the_task_is_created_from_an_xml_file(schtasks) -> None:
     assert not Path(call[call.index("/XML") + 1]).exists()
 
 
+def test_the_temporary_file_does_not_leak_a_descriptor(schtasks) -> None:
+    """The file has to be closed, otherwise Windows cannot delete it."""
+    backend = ScheduledTaskBackend()
+    definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
+
+    before = _open_descriptors()
+    for index in range(10):
+        backend.create_from_definition(f"dontneed-dns-{index}", definition)
+    after = _open_descriptors()
+
+    assert after - before <= 2, f"{after - before} file descriptors leaked"
+
+
+def _open_descriptors() -> int:
+    """The number of file descriptors of this process."""
+    directory = Path("/proc/self/fd")
+    if not directory.exists():
+        return 0
+    return len(list(directory.iterdir()))
+
+
 def test_the_xml_file_is_written_in_utf16(schtasks) -> None:
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")

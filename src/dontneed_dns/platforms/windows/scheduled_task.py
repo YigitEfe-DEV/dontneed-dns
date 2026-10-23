@@ -242,7 +242,11 @@ class ScheduledTaskBackend:
     def create_from_definition(self, task_name: str, definition: TaskDefinition) -> CommandResult:
         """Create (or replace) a scheduled task from an XML definition."""
         xml = build_task_xml(definition)
-        path = Path(tempfile.mkstemp(suffix=".xml", prefix="dontneed-dns-")[1])
+        descriptor, name = tempfile.mkstemp(suffix=".xml", prefix="dontneed-dns-")
+        # The descriptor has to be closed, otherwise Windows keeps the file
+        # open and refuses to delete it.
+        os.close(descriptor)
+        path = Path(name)
         try:
             # Task Scheduler expects the definition in UTF-16.
             path.write_bytes(xml.encode("utf-16"))

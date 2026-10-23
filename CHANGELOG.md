@@ -35,6 +35,9 @@ makes the state of the installation consistent on both platforms.
 - The complete output of a failed command is reported.  Only the last line
   of the error message was kept, which is often not the part that explains
   what went wrong.
+- The temporary file of the task definition is closed before it is deleted.
+  Windows refuses to delete a file that is still open, so the file was left
+  behind and its descriptor leaked.
 - The source installation of the Windows edition works again.  The task
   starts in the directory of the package, which `python -m` puts at the
   beginning of `sys.path`, so the package is found even when it is not
