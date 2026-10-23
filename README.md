@@ -45,7 +45,7 @@ executable:
 | `SHA256SUMS` | - | the checksum of every file |
 
 ```bash
-gh release download v0.1.0 --dir dontneed-dns
+gh release download v0.1.1 --dir dontneed-dns
 cd dontneed-dns && sha256sum -c SHA256SUMS
 ```
 

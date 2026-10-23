@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-23
+
+### Fixed
+
+- The listening port is released immediately when a component stops.  A
+  thread that was blocked in `accept()` kept the socket alive in the
+  kernel, so the port stayed bound until the next connection arrived.
+- The DNS listener opens the TCP socket first, so the operating system
+  chooses a port that is valid for both protocols.  Windows reserves parts
+  of the dynamic range for TCP and a reserved port cannot be bound at all.
+- The IPv6 listener uses the port of the IPv4 listener instead of picking
+  a second one.
+- A busy port is reported instead of being taken over silently.  Windows
+  allows two sockets to bind the same address because `SO_REUSEADDR` is not
+  as restrictive there as on Linux.
+- The systemd unit directory follows `XDG_CONFIG_HOME`, which is where
+  systemd reads the user units from.
+- The installation creates the state directory, without which the hardened
+  unit fails to start with `226/NAMESPACE`.
+- An empty `dns.listen_host_v6` disables the IPv6 listener instead of
+  being rejected.
+
 ## [0.1.0] - 2026-10-23
 
 The first release.  It replaces an installation that grew from a single
