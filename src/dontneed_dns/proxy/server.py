@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dontneed_dns.core.config import ProxyConfig
 from dontneed_dns.core.logging_setup import get_logger
 from dontneed_dns.core.resolver import SplitResolver
-from dontneed_dns.core.system import port_in_use
+from dontneed_dns.core.system import close_listener, port_in_use
 from dontneed_dns.proxy import http_connect, socks5
 from dontneed_dns.proxy.fragmentation import FragmentationSettings, TlsFragmenter
 
@@ -114,10 +114,7 @@ class ProxyServer:
         """Stop the proxy and release the listening socket."""
         self._stop_event.set()
         if self._socket is not None:
-            try:
-                self._socket.close()
-            except OSError:
-                pass
+            close_listener(self._socket)
             self._socket = None
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)

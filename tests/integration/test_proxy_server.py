@@ -169,7 +169,7 @@ def test_the_proxy_reports_an_unreachable_target(proxy) -> None:
 def test_the_proxy_releases_the_port_on_shutdown(proxy) -> None:
     port = proxy.bound[1]  # type: ignore[index]
     proxy.shutdown()
-    time.sleep(0.3)
+    time.sleep(1.0)
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=2)
 

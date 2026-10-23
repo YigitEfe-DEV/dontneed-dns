@@ -23,7 +23,7 @@ from dontneed_dns.core.dnsmessage import build_error_response, parse_message
 from dontneed_dns.core.errors import DNSProtocolError
 from dontneed_dns.core.logging_setup import get_logger
 from dontneed_dns.core.resolver import SplitResolver
-from dontneed_dns.core.system import port_in_use
+from dontneed_dns.core.system import close_listener, port_in_use
 
 __all__ = ["DnsServer"]
 
@@ -223,16 +223,10 @@ class DnsServer:
         """Stop the server and release every socket."""
         self._stop_event.set()
         for sock in self._udp_sockets:
-            try:
-                sock.close()
-            except OSError:
-                pass
+            close_listener(sock)
         self._udp_sockets.clear()
         if self._tcp_socket is not None:
-            try:
-                self._tcp_socket.close()
-            except OSError:
-                pass
+            close_listener(self._tcp_socket)
             self._tcp_socket = None
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)

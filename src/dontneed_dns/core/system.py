@@ -24,6 +24,7 @@ from dontneed_dns.core.constants import DEFAULT_COMMAND_TIMEOUT
 
 __all__ = [
     "CommandResult",
+    "close_listener",
     "is_linux",
     "is_root",
     "is_windows",
@@ -148,6 +149,24 @@ def process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def close_listener(sock: socket.socket) -> None:
+    """Close a listening socket and release its port immediately.
+
+    A thread that is blocked in ``accept()`` keeps the socket alive in the
+    kernel, so closing it is not enough: the port would stay bound until
+    the next connection arrives.  Shutting the socket down first wakes the
+    blocked call up.
+    """
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
 
 
 def port_in_use(host: str, port: int, *, timeout: float = 0.5) -> bool:

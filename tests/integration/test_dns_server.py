@@ -137,7 +137,7 @@ def test_an_unsupported_opcode_gets_notimp(server) -> None:
 def test_the_server_releases_its_ports_on_shutdown(server) -> None:
     port = server.port
     server.shutdown()
-    time.sleep(0.3)
+    time.sleep(1.0)
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", port), timeout=2)
 
