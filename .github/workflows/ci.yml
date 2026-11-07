@@ -216,6 +216,7 @@ jobs:
           foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
             schtasks /Query /TN $task
             if ($LASTEXITCODE -eq 0) { throw "the task $task still exists" }
+            $LASTEXITCODE = 0
           }
           # The processes have to be gone as well.
           Start-Sleep -Seconds 3
