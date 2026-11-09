@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
+from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Header, Static
 
@@ -85,7 +86,9 @@ class DontneedDnsApp(App):
     }
     """
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    # The type of the base class has to be used exactly; a list is
+    # invariant, so a narrower type would not be accepted.
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("ctrl+s", "start_all", "Start all"),

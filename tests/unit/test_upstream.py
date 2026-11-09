@@ -95,10 +95,11 @@ def test_the_resolver_restores_the_default_timeout() -> None:
     before = socket.getdefaulttimeout()
     socket.setdefaulttimeout(None)
     try:
+        expected = socket.getdefaulttimeout()
         resolver = GetAddrInfoResolver(timeout=7.0)
         assert socket.getdefaulttimeout() == 7.0
         resolver.close()
-        assert socket.getdefaulttimeout() == before
+        assert socket.getdefaulttimeout() == expected
     finally:
         socket.setdefaulttimeout(before)
 
