@@ -145,7 +145,13 @@ def test_the_task_is_created_from_an_xml_file(schtasks) -> None:
 
 
 def test_the_temporary_file_does_not_leak_a_descriptor(schtasks) -> None:
-    """The file has to be closed, otherwise Windows cannot delete it."""
+    """The file has to be closed, otherwise Windows cannot delete it.
+
+    A file that is still open cannot be removed on Windows, so a temporary
+    file that is still there after the call means that the descriptor was
+    not closed.  On Linux the number of the open descriptors is counted
+    instead, because there the removal succeeds either way.
+    """
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
 
@@ -157,20 +163,34 @@ def test_the_temporary_file_does_not_leak_a_descriptor(schtasks) -> None:
     assert after - before <= 2, f"{after - before} file descriptors leaked"
 
 
+def test_the_temporary_file_is_removed(schtasks) -> None:
+    """The temporary file has to be gone when the call returns.
+
+    This is the check that works on Windows: a file that is still open
+    cannot be removed there, so a leftover file means that the descriptor
+    of the file was not closed.
+    """
+    backend = ScheduledTaskBackend()
+    definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
+
+    for index in range(10):
+        backend.create_from_definition(f"dontneed-dns-{index}", definition)
+
+    leftovers = [path for path in schtasks.xml_files if path.exists()]
+    assert not leftovers, f"{leftovers} could not be removed"
+
+
 def _open_descriptors() -> int:
     """The number of file descriptors of this process.
 
-    ``/proc`` only exists on Linux.  On Windows the number of open handles
-    is counted with the C runtime, which knows how many it opened.
+    ``/proc`` only exists on Linux.  On Windows the number of the open
+    handles cannot be counted from Python, so the check of the temporary
+    file does the work there.
     """
     directory = Path("/proc/self/fd")
-    if directory.exists():
-        return len(list(directory.iterdir()))
-    try:
-        import msvcrt
-    except ImportError:
+    if not directory.exists():
         return 0
-    return int(msvcrt.getmaxstdio())
+    return len(list(directory.iterdir()))
 
 
 def test_the_xml_file_is_written_in_utf16(schtasks) -> None:

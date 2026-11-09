@@ -101,6 +101,18 @@ encrypted payload.  Whether a particular middlebox is confused by it cannot
 be verified from inside this project, so the feature is disabled by default,
 labelled experimental in the capability matrix and documented as such.
 
+### The ports are checked before the listeners are opened
+
+The resolver needs its port for TCP and for datagram traffic at the same
+time, because a client that receives a truncated answer retries over TCP.
+On Linux a port that is taken makes the bind fail, but Windows shares an
+address between two sockets more willingly, so the bind can succeed while
+another program already holds the port.  The conflict is therefore looked
+for explicitly: the TCP port is probed with a connection and the datagram
+port with an exclusive bind, which fails no matter how the other socket was
+created.  A datagram socket never enters the `TIME_WAIT` state, so the
+probe cannot report a port that is only waiting to expire.
+
 ## The data flow
 
 ```
@@ -136,14 +148,26 @@ closed, the pending work is cancelled and the listener ports are released.
 * `tests/integration` - real sockets: a DNS query over UDP and TCP, a
   SOCKS5 and an HTTP CONNECT relay, the terminal interface.
 * `tests/linux` - the systemd adapter with the external commands mocked.
-* `tests/windows` - the Task Scheduler backend with the external commands
-  mocked; the same tests run on the Windows runner of the workflow.
+  The directory is skipped on every other platform.
+* `tests/windows` - the Task Scheduler backend, the Service Control Manager
+  backend and the paths with the external commands mocked.  The directory is
+  **not** skipped on other platforms: the mocked tests describe the
+  behaviour of the edition and are worth running everywhere.  The marker
+  `windows` selects them.
 
 The Windows tests are executed on a real Windows runner in GitHub Actions.
-A mocked test never counts as proof that a feature works on Windows.  Two
-jobs of the workflow go beyond the unit tests: one parses the PowerShell
-scripts with the PowerShell parser, the other installs the project on the
-runner, checks that the scheduled tasks exist and removes them again.
+A mocked test never counts as proof that a feature works on Windows.  Three
+jobs of the workflow go beyond the unit tests:
+
+* one parses the PowerShell scripts with the parser of **every** available
+  engine, because the end user runs them with Windows PowerShell 5.1 while
+  the runner uses PowerShell 7,
+* one installs the project on the runner, checks that the scheduled tasks
+  exist and run the right program, starts the components, checks the
+  listeners, the health check and the state of the automatic startup, and
+  removes them again,
+* one checks that the installer reports a package without an executable and
+  leaves a log file behind.
 
 The scripts of the Windows edition are additionally executed with PowerShell
 on every platform that has it, against a stand in for the executable, so

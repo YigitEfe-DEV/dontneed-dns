@@ -87,6 +87,49 @@ def _socks5_probe(host: str, port: int, timeout: float = 2.0) -> tuple[bool, str
     return False, f"unexpected greeting answer: {reply!r}"
 
 
+def _doh_probe(config: Config, timeout: float) -> tuple[bool, str]:
+    """Check that a split domain is answered over DNS-over-HTTPS.
+
+    The query goes through the same resolver the components use.  A split
+    domain that is answered by the system resolver means that the plain
+    text lookup happens after all, which is the thing this project is
+    meant to prevent.  The check therefore looks at where the answer came
+    from and not only at whether there is one.
+    """
+    from dontneed_dns.core.doh import DohClient, select_providers
+    from dontneed_dns.core.resolver import SplitResolver
+    from dontneed_dns.core.upstream import create_system_resolver
+
+    domain = config.dns.split_domains[0] if config.dns.split_domains else "discord.com"
+    try:
+        providers = select_providers(config.dns.doh_providers)
+    except ValueError as exc:
+        return False, str(exc)
+
+    doh = DohClient(providers, timeout=timeout, retries=config.dns.retries)
+    system = create_system_resolver(timeout=timeout) if config.dns.system_fallback else None
+    resolver = SplitResolver(
+        doh,
+        system,
+        split_domains=config.dns.split_domains,
+        route_split=config.dns.route_split,
+        system_fallback=config.dns.system_fallback,
+    )
+    try:
+        result = resolver.resolve_wire(build_query(domain))
+    except Exception as exc:  # noqa: BLE001 - every failure is reported
+        return False, str(exc)
+    finally:
+        # The system resolver may have changed a process wide setting.
+        resolver.close()
+
+    if not result.ok:
+        return False, result.error or "no answer"
+    if result.source != "doh":
+        return False, f"{domain} was answered by the {result.source} resolver, not over DNS-over-HTTPS"
+    return True, f"{domain} was answered over DNS-over-HTTPS"
+
+
 def run_health_checks(config: Config, *, timeout: float = 3.0) -> list[HealthCheck]:
     """Run every health check and return the results."""
     checks: list[HealthCheck] = []
@@ -184,6 +227,20 @@ def run_health_checks(config: Config, *, timeout: float = 3.0) -> list[HealthChe
                 Severity.WARNING,
             )
         )
+
+    # The providers are asked directly.  The check of the local listener
+    # cannot tell whether a split domain was answered over DNS-over-HTTPS
+    # or by the system resolver, and the second one is the failure this
+    # project exists to prevent.
+    ok, detail = _doh_probe(config, timeout)
+    checks.append(
+        HealthCheck(
+            "DNS-over-HTTPS",
+            ok,
+            detail,
+            Severity.WARNING,
+        )
+    )
 
     fragment_state = "enabled" if config.proxy.fragmentation_enabled else "disabled"
     checks.append(
