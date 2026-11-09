@@ -12,6 +12,10 @@ import pytest
 from dontneed_dns.core.config import Config
 from dontneed_dns.core.health import Severity, run_health_checks
 
+# The real probe is imported here, because the suite replaces it with a
+# stub that keeps the tests away from the network.
+from dontneed_dns.core.health import _doh_probe as real_doh_probe
+
 
 @pytest.fixture
 def config() -> Config:
@@ -74,7 +78,6 @@ def test_a_provider_that_cannot_be_reached_is_reported(monkeypatch: pytest.Monke
 
 def test_the_probe_asks_the_configured_providers(monkeypatch: pytest.MonkeyPatch, config) -> None:
     """The probe has to use the providers of the configuration."""
-    from dontneed_dns.core import health
     from dontneed_dns.core.doh import DohClient
 
     seen: list[str] = []
@@ -93,7 +96,7 @@ def test_the_probe_asks_the_configured_providers(monkeypatch: pytest.MonkeyPatch
     )
     monkeypatch.setattr("dontneed_dns.core.upstream.create_system_resolver", lambda **kwargs: None)
 
-    ok, detail = health._doh_probe(config, 1.0)
+    ok, detail = real_doh_probe(config, 1.0)
 
     assert seen == ["cloudflare", "google", "quad9"]
     assert ok is True

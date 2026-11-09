@@ -27,6 +27,12 @@ dig @127.0.0.1 -p 5354 discord.com
 
   A timeout here means the network blocks the provider, not that the
   project is broken.
+* **"discord.com was answered by the system resolver"** - the providers
+  could not be reached, so the query went out in the clear instead of over
+  DNS-over-HTTPS.  The check asks the providers directly, so this message
+  appears even when the local resolver answered the query.  Test the
+  providers as shown above; a firewall that blocks the port 443 of the
+  provider is the usual cause.
 
 ## The proxy does not connect
 

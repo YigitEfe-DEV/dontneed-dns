@@ -66,6 +66,11 @@ made on the runner.
 - The PowerShell scripts were only parsed with PowerShell 7, while the end
   user runs them with Windows PowerShell 5.1.  Both engines parse them
   now.
+- The health check was happy with any answer of the local resolver.  A
+  split domain that is answered by the system resolver means that the plain
+  text lookup happens after all, which is the failure this project exists
+  to prevent.  The providers are asked directly now and the check reports
+  where the answer came from.
 
 ### Added
 
@@ -79,6 +84,11 @@ made on the runner.
   published.
 - The workflow checks that the state of the automatic startup is read back
   correctly on the Windows runner.
+- The check of the open descriptors used an API of the C runtime that
+  Python does not expose.  The property it protects is checked directly
+  now: a temporary file that is still open cannot be removed on Windows.
+- The Service Control Manager backend is covered by tests now, including
+  the quoting of the path of the program.
 
 ## [0.1.2] - 2026-10-23
 

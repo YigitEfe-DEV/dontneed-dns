@@ -125,6 +125,36 @@ def test_a_task_of_another_account_is_reported(schtasks) -> None:
     assert "runs as" in verification.detail
 
 
+def test_a_unicode_path_survives_the_definition(schtasks) -> None:
+    """A path with a character outside of ASCII has to survive.
+
+    The definition is written in UTF-16 and read back by the Task
+    Scheduler, so a name with an umlaut or a character of another script
+    has to come back unchanged.
+    """
+    backend = ScheduledTaskBackend()
+    command = r"C:\Users\Müller\AppData\Local\dontneed-dns\dontneed-dns.exe"
+    arguments = 'run dns --config "C:\\Users\\Müller\\AppData\\Roaming\\config.toml"'
+    definition = TaskDefinition(command=command, arguments=arguments, user_id="DOMÄIN\\Benutzer")
+
+    xml = build_task_xml(definition)
+    assert "Müller" in xml
+    assert "Benutzer" in xml
+
+    backend.create_from_definition("dontneed-dns-dns", definition)
+
+    stored = schtasks.tasks["dontneed-dns-dns"]
+    assert "Müller" in stored
+    verification = backend.verify("dontneed-dns-dns", definition)
+    assert verification.ok, verification.detail
+
+
+def test_a_unicode_account_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USERNAME", "Benutzer")
+    monkeypatch.setenv("USERDOMAIN", "DOMÄIN")
+    assert current_user_id() == "DOMÄIN\\Benutzer"
+
+
 def test_the_task_is_created_from_an_xml_file(schtasks) -> None:
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(
