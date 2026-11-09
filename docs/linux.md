@@ -144,6 +144,12 @@ journalctl --user -u dontneed-dns-proxy.service -f
 dontneed-dns logs -n 100
 ```
 
+The journal is the primary place for the output of the components.  The
+same lines are also written to
+`~/.local/state/dontneed-dns/logs/dontneed-dns.log`, which is the file the
+Windows edition uses as well; the location can be changed with
+`logging.file` in the configuration.
+
 ## Uninstall
 
 ```bash
