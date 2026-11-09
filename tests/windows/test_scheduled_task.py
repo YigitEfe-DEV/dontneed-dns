@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,7 @@ from dontneed_dns.platforms.windows.scheduled_task import (
     build_task_xml,
     current_user_id,
 )
+from tests.windows.conftest import disable_the_task, disable_the_trigger
 
 pytestmark = pytest.mark.windows
 
@@ -72,6 +72,89 @@ def test_the_task_has_no_execution_time_limit() -> None:
     assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in xml
 
 
+def test_a_disabled_task_is_reported_as_disabled(schtasks) -> None:
+    """The state of the task is the one of the settings, not of the trigger.
+
+    A task definition holds two ``<Enabled>`` elements.  Disabling the task
+    changes the one of the settings and leaves the one of the trigger alone,
+    so reading the first element of the document would report a disabled
+    task as enabled.
+    """
+    backend = ScheduledTaskBackend()
+    backend.create_from_definition("dontneed-dns-proxy", TaskDefinition(command="app.exe"))
+    assert backend.is_enabled("dontneed-dns-proxy") is True
+
+    schtasks.tasks["dontneed-dns-proxy"] = disable_the_task(schtasks.tasks["dontneed-dns-proxy"])
+
+    assert backend.is_enabled("dontneed-dns-proxy") is False
+
+
+def test_the_trigger_state_does_not_decide_the_state_of_the_task(schtasks) -> None:
+    """A disabled trigger alone does not disable the task."""
+    backend = ScheduledTaskBackend()
+    backend.create_from_definition("dontneed-dns-proxy", TaskDefinition(command="app.exe"))
+
+    schtasks.tasks["dontneed-dns-proxy"] = disable_the_trigger(schtasks.tasks["dontneed-dns-proxy"])
+
+    assert backend.is_enabled("dontneed-dns-proxy") is True
+
+
+def test_a_task_of_another_account_is_reported(schtasks) -> None:
+    """The account the task *runs as* has to be the current user.
+
+    The principal of the task decides whose account the component runs
+    under.  A task that belongs to another account has to be reported as a
+    failed installation, otherwise the component would run with the rights
+    and the data of somebody else.
+    """
+    backend = ScheduledTaskBackend()
+    definition = TaskDefinition(
+        command=r"C:\app\dontneed-dns.exe", arguments="run proxy", user_id="ATALYY\\Excalibur"
+    )
+    backend.create_from_definition("dontneed-dns-proxy", definition)
+
+    xml = schtasks.tasks["dontneed-dns-proxy"]
+    principal = xml.index("<Principals>")
+    end = xml.index("</Principal>")
+    xml = xml[:principal] + xml[principal:end].replace("ATALYY\\Excalibur", "OTHER\\someone") + xml[end:]
+    schtasks.tasks["dontneed-dns-proxy"] = xml
+
+    verification = backend.verify("dontneed-dns-proxy", definition)
+    assert not verification.ok
+    assert "OTHER" in verification.detail
+    assert "runs as" in verification.detail
+
+
+def test_a_unicode_path_survives_the_definition(schtasks) -> None:
+    """A path with a character outside of ASCII has to survive.
+
+    The definition is written in UTF-16 and read back by the Task
+    Scheduler, so a name with an umlaut or a character of another script
+    has to come back unchanged.
+    """
+    backend = ScheduledTaskBackend()
+    command = r"C:\Users\Müller\AppData\Local\dontneed-dns\dontneed-dns.exe"
+    arguments = 'run dns --config "C:\\Users\\Müller\\AppData\\Roaming\\config.toml"'
+    definition = TaskDefinition(command=command, arguments=arguments, user_id="DOMÄIN\\Benutzer")
+
+    xml = build_task_xml(definition)
+    assert "Müller" in xml
+    assert "Benutzer" in xml
+
+    backend.create_from_definition("dontneed-dns-dns", definition)
+
+    stored = schtasks.tasks["dontneed-dns-dns"]
+    assert "Müller" in stored
+    verification = backend.verify("dontneed-dns-dns", definition)
+    assert verification.ok, verification.detail
+
+
+def test_a_unicode_account_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USERNAME", "Benutzer")
+    monkeypatch.setenv("USERDOMAIN", "DOMÄIN")
+    assert current_user_id() == "DOMÄIN\\Benutzer"
+
+
 def test_the_task_is_created_from_an_xml_file(schtasks) -> None:
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(
@@ -92,7 +175,13 @@ def test_the_task_is_created_from_an_xml_file(schtasks) -> None:
 
 
 def test_the_temporary_file_does_not_leak_a_descriptor(schtasks) -> None:
-    """The file has to be closed, otherwise Windows cannot delete it."""
+    """The file has to be closed, otherwise Windows cannot delete it.
+
+    A file that is still open cannot be removed on Windows, so a temporary
+    file that is still there after the call means that the descriptor was
+    not closed.  On Linux the number of the open descriptors is counted
+    instead, because there the removal succeeds either way.
+    """
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
 
@@ -104,8 +193,30 @@ def test_the_temporary_file_does_not_leak_a_descriptor(schtasks) -> None:
     assert after - before <= 2, f"{after - before} file descriptors leaked"
 
 
+def test_the_temporary_file_is_removed(schtasks) -> None:
+    """The temporary file has to be gone when the call returns.
+
+    This is the check that works on Windows: a file that is still open
+    cannot be removed there, so a leftover file means that the descriptor
+    of the file was not closed.
+    """
+    backend = ScheduledTaskBackend()
+    definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
+
+    for index in range(10):
+        backend.create_from_definition(f"dontneed-dns-{index}", definition)
+
+    leftovers = [path for path in schtasks.xml_files if path.exists()]
+    assert not leftovers, f"{leftovers} could not be removed"
+
+
 def _open_descriptors() -> int:
-    """The number of file descriptors of this process."""
+    """The number of file descriptors of this process.
+
+    ``/proc`` only exists on Linux.  On Windows the number of the open
+    handles cannot be counted from Python, so the check of the temporary
+    file does the work there.
+    """
     directory = Path("/proc/self/fd")
     if not directory.exists():
         return 0
@@ -113,6 +224,11 @@ def _open_descriptors() -> int:
 
 
 def test_the_xml_file_is_written_in_utf16(schtasks) -> None:
+    """The Task Scheduler expects the definition in UTF-16.
+
+    The fake reads the file back as UTF-16, so a file in another encoding
+    would make it fail before the assertion below is reached.
+    """
     backend = ScheduledTaskBackend()
     definition = TaskDefinition(command=r"C:\app\dontneed-dns.exe", arguments="run proxy")
 
@@ -120,9 +236,7 @@ def test_the_xml_file_is_written_in_utf16(schtasks) -> None:
 
     call = schtasks.call_with("/Create")
     assert call is not None
-    raw = Path(call[call.index("/XML") + 1])
-    # The fake read the file back, so it has to be readable as UTF-16.
-    assert raw.exists() or True  # the fake removes it, the encoding is checked below
+    assert "/XML" in call
     assert schtasks.tasks["dontneed-dns-proxy"].startswith("<?xml")
 
 
@@ -281,4 +395,5 @@ def test_the_environment_is_not_needed_for_the_definition() -> None:
     """The definition is built from the environment, not from a shell."""
     definition = TaskDefinition(command="app.exe", user_id=current_user_id())
     assert definition.command_line() == '"app.exe"'
-    assert os.environ.get("USERNAME") is not None or True
+    # The command is quoted so that a path with a space stays one argument.
+    assert definition.command_line().count('"') == 2

@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from build_release import FORBIDDEN_PATTERNS
+from build_release import FORBIDDEN_PATTERNS, PLATFORM_ENTRIES
 
 REQUIRED_ENTRIES = ("README.md", "LICENSE", "VERSION")
 SOURCE_ENTRY = "src/dontneed_dns/__init__.py"
@@ -70,7 +70,7 @@ def verify_archive(archive: Path) -> list[str]:
             if name.endswith(foreign):
                 problems.append(f"{archive.name}: the file of the other platform {name}")
 
-        for required in (*REQUIRED_ENTRIES, SOURCE_ENTRY):
+        for required in (*REQUIRED_ENTRIES, SOURCE_ENTRY, *PLATFORM_ENTRIES[platform]):
             if not any(name.endswith(required) for name in names):
                 problems.append(f"{archive.name}: {required} is missing")
 
@@ -82,7 +82,13 @@ def verify_archive(archive: Path) -> list[str]:
 
 
 def verify_checksums(directory: Path) -> list[str]:
-    """Compare the archives with the ``SHA256SUMS`` file."""
+    """Compare the archives with the ``SHA256SUMS`` file.
+
+    The comparison runs in both directions: a file that is listed but does
+    not exist is a problem, and so is a published file that is not listed.
+    The second direction matters, because a checksum file that was written
+    with a fallback would silently leave an asset unprotected.
+    """
     problems: list[str] = []
     checksum_file = directory / "SHA256SUMS"
     if not checksum_file.exists():
@@ -102,6 +108,16 @@ def verify_checksums(directory: Path) -> list[str]:
         actual = sha256_of(path)
         if actual != checksum:
             problems.append(f"{name}: the checksum does not match ({actual} != {checksum})")
+
+    for path in sorted(directory.iterdir()):
+        if not path.is_file():
+            continue
+        if path.name == checksum_file.name:
+            continue
+        if path.suffix not in (".zip", ".exe"):
+            continue
+        if path.name not in expected:
+            problems.append(f"{path.name} is published but not listed in {checksum_file.name}")
 
     return problems
 

@@ -27,6 +27,12 @@ dig @127.0.0.1 -p 5354 discord.com
 
   A timeout here means the network blocks the provider, not that the
   project is broken.
+* **"discord.com was answered by the system resolver"** - the providers
+  could not be reached, so the query went out in the clear instead of over
+  DNS-over-HTTPS.  The check asks the providers directly, so this message
+  appears even when the local resolver answered the query.  Test the
+  providers as shown above; a firewall that blocks the port 443 of the
+  provider is the usual cause.
 
 ## The proxy does not connect
 
@@ -124,6 +130,11 @@ Resolve-DnsName -Server 127.0.0.1 -Port 5354 -Type A discord.com
 
   A port that is already taken is reported as such.  Change
   `dns.listen_port` in the configuration or stop the other program.
+* **"the port 5354 on 127.0.0.1 is already in use for datagram traffic"** -
+  another program holds the port for datagram traffic only.  The resolver
+  needs the port for TCP and for datagrams at the same time, so it refuses
+  to start.  Find the program with
+  `netstat -ano | findstr :5354` and stop it, or change the port.
 * **Only the UDP listener works** - this was a defect of the releases up to
   0.1.1: the IPv6 listener replaced the IPv4 TCP listener and closed its
   port.  Update to 0.1.2 or newer.

@@ -63,6 +63,13 @@ PLATFORM_DOCS = {
     "windows": ("docs/windows.md", "docs/architecture.md", "docs/security.md", "docs/troubleshooting.md"),
 }
 
+#: The files an archive has to carry for the platform it belongs to.
+#: Without them the end user could not install the archive.
+PLATFORM_ENTRIES = {
+    "linux": ("install.sh", "uninstall.sh"),
+    "windows": ("install.ps1", "uninstall.ps1", "dontneed-dns.exe"),
+}
+
 WHEELHOUSE_REQUIREMENTS = ("typer", "rich", "textual")
 
 
@@ -82,7 +89,11 @@ def pip_command() -> list[str]:
     used as a fallback.
     """
     probe = subprocess.run(
-        [sys.executable, "-m", "pip", "--version"], capture_output=True, text=True, check=False
+        [sys.executable, "-m", "pip", "--version"],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
     )
     if probe.returncode == 0:
         return [sys.executable, "-m", "pip"]
@@ -113,7 +124,11 @@ def build_wheelhouse(target: Path, *, platform: str) -> None:
         *WHEELHOUSE_REQUIREMENTS,
     ]
     if platform == "windows":
-        command.extend(["--platform", "win_amd64", "--python-version", "3.11", "--implementation", "cp"])
+        # The wheels have to match the interpreter that builds the project
+        # wheel, otherwise a dependency that ships a compiled wheel would
+        # be resolved for another version of Python.
+        version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        command.extend(["--platform", "win_amd64", "--python-version", version, "--implementation", "cp"])
     run(command)
 
 
@@ -264,7 +279,13 @@ def verify_archive(archive: Path, platform: str) -> None:
             if name.endswith(foreign):
                 raise SystemExit(f"{archive} contains a file of the other platform: {name}")
 
-        expected = {"README.md", "LICENSE", "VERSION", "src/dontneed_dns/__init__.py"}
+        expected = {
+            "README.md",
+            "LICENSE",
+            "VERSION",
+            "src/dontneed_dns/__init__.py",
+            *PLATFORM_ENTRIES[platform],
+        }
         missing = {entry for entry in expected if not any(name.endswith(entry) for name in names)}
         if missing:
             raise SystemExit(f"{archive} is missing: {', '.join(sorted(missing))}")

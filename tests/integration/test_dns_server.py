@@ -216,7 +216,12 @@ def dual_stack_server(doh_transport):
         host_v6="::1",
         enable_tcp=True,
     )
-    instance.bind()
+    try:
+        instance.bind()
+    except OSError as exc:
+        # A machine without IPv6 has no second listener; the tests that
+        # need one are skipped instead of failing.
+        pytest.skip(f"the IPv6 listener is not available: {exc}")
     thread = threading.Thread(target=instance.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.2)

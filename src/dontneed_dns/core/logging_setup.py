@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
+from typing import TextIO
 
 from dontneed_dns.core.config import Config
+from dontneed_dns.core.paths import log_path
 from dontneed_dns.core.redact import Redactor
 
 __all__ = ["LOGGER_NAME", "get_logger", "setup_logging"]
@@ -42,8 +45,37 @@ class _RedactingFilter(logging.Filter):
         return True
 
 
+class _SafeStreamHandler(logging.StreamHandler):
+    """A stream handler that survives a console that cannot be written to.
+
+    A scheduled task and a windowed executable run without a console.  The
+    stream of such a process is either absent or an invalid handle, and the
+    default error handling of the logging system would raise while it tries
+    to report the original problem.  The log file is the reliable sink, so
+    the console is allowed to fail silently.
+    """
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Never raise from the logging system."""
+
+
+def _console_stream() -> TextIO | None:
+    """Return a usable console stream, or ``None`` when there is none."""
+    for candidate in (sys.stdout, sys.stderr):
+        if candidate is not None:
+            return candidate
+    return None
+
+
 def setup_logging(config: Config, *, verbose: bool = False, quiet: bool = False) -> logging.Logger:
-    """Configure and return the project logger."""
+    """Configure and return the project logger.
+
+    A log file is always written.  When the configuration does not name one,
+    the platform default is used: the file in the per-user state directory on
+    Linux and the file in the per-user application data directory on
+    Windows.  Without it the Windows edition would have no log at all,
+    because a scheduled task has no console to write to.
+    """
     logger = logging.getLogger(LOGGER_NAME)
     logger.handlers.clear()
     logger.propagate = False
@@ -55,21 +87,22 @@ def setup_logging(config: Config, *, verbose: bool = False, quiet: bool = False)
 
     formatter = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
+    stream = _console_stream()
+    if stream is not None:
+        stream_handler = _SafeStreamHandler(stream)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
 
-    if config.logging.file:
-        log_file = Path(config.logging.file)
-        try:
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.handlers.RotatingFileHandler(
-                log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
-            )
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        except OSError as exc:
-            logger.warning("log file could not be opened: %s", exc.strerror)
+    log_file = Path(config.logging.file) if config.logging.file else log_path()
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except OSError as exc:
+        logger.warning("log file %s could not be opened: %s", log_file, exc.strerror or exc)
 
     if config.logging.redact:
         redactor = Redactor()

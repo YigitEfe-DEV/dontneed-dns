@@ -20,6 +20,7 @@ from dontneed_dns.platforms.windows import adapter as windows_adapter
 from dontneed_dns.platforms.windows import scheduled_task as task_module
 from dontneed_dns.platforms.windows import scm as windows_scm
 from dontneed_dns.platforms.windows.scheduled_task import TaskDefinition
+from tests.windows.conftest import disable_the_task
 
 pytestmark = pytest.mark.windows
 
@@ -145,7 +146,11 @@ def test_the_command_line_form_is_the_fallback(adapter, schtasks, config_path) -
 
     assert result.ok, result.detail
     assert schtasks.called("/Create")
-    # The fallback was used, so the task exists with the command line form.
+    # The fallback was used, so the task was created without an XML file.
+    assert not schtasks.xml_files
+    call = next((c for c in schtasks.calls if "/TR" in c), None)
+    assert call is not None, "the command line form was not used"
+    assert "/XML" not in call
     assert "dontneed-dns-dns" in schtasks.tasks
 
 
@@ -161,14 +166,20 @@ def test_both_creation_forms_failing_reports_both_errors(adapter, schtasks, conf
 
 
 def test_a_task_with_the_wrong_command_is_a_failure(adapter, schtasks, config_path) -> None:
-    adapter.install(Component.DNS, scope="user")
-    schtasks.tasks["dontneed-dns-dns"] = schtasks.tasks["dontneed-dns-dns"].replace(
-        "<Command>", "<Command>C:\\other\\"
-    )
+    """A task that runs another program is not a successful installation."""
+    original = adapter.tasks.create_from_definition
 
-    # The installation is repeated, the broken definition is found.
+    def create_and_break(task_name, definition):
+        result = original(task_name, definition)
+        schtasks.tasks[task_name] = schtasks.tasks[task_name].replace(definition.command, r"C:\other\app.exe")
+        return result
+
+    adapter.tasks.create_from_definition = create_and_break  # type: ignore[method-assign]
+
     result = adapter.install(Component.DNS, scope="user")
-    assert result.ok or not result.ok  # the fake replaces the task on create
+
+    assert not result.ok
+    assert "does not match" in result.message
 
 
 def test_a_verification_failure_is_reported(adapter, schtasks, config_path) -> None:
@@ -227,6 +238,10 @@ def test_the_running_process_is_found_at_the_path_of_the_service_runner(
     """
     from dontneed_dns.core import paths as core_paths
 
+    # The state directory is redirected, so that the test does not write
+    # into the state directory of the user.
+    monkeypatch.setattr(core_paths, "data_dir", lambda: tmp_path)
+
     pid_file = core_paths.pid_file("dontneed-dns-dns")
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
@@ -241,9 +256,10 @@ def test_the_autostart_state_is_read_from_the_task_xml(adapter, schtasks, config
     adapter.install(Component.DNS, scope="user")
     assert adapter.is_enabled(Component.DNS) is True
 
-    schtasks.tasks["dontneed-dns-dns"] = schtasks.tasks["dontneed-dns-dns"].replace(
-        "<Enabled>true</Enabled>", "<Enabled>false</Enabled>"
-    )
+    # Only the state of the task is changed.  The definition holds a second
+    # ``<Enabled>`` element in the trigger, and that one decides whether the
+    # trigger is active, not whether the task is.
+    schtasks.tasks["dontneed-dns-dns"] = disable_the_task(schtasks.tasks["dontneed-dns-dns"])
     assert adapter.is_enabled(Component.DNS) is False
 
 
@@ -286,20 +302,116 @@ def test_uninstall_removes_the_task(adapter, schtasks, config_path) -> None:
 def test_the_uninstall_stops_an_unregistered_process(
     adapter, schtasks, pid_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A process without a task belongs to this project and has to be stopped."""
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
     killed: list[list[str]] = []
+    alive = {"value": True}
 
     def fake_run(argv, *, timeout=30.0, **kwargs):
         killed.append(list(argv))
+        # The taskkill succeeds and the process disappears.
+        alive["value"] = False
         return CommandResult(("",), 0, "", "")
 
     monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+    monkeypatch.setattr("dontneed_dns.core.system.process_alive", lambda pid: alive["value"])
 
     result = adapter.uninstall(Component.DNS, scope="user")
 
-    assert result.ok
+    assert result.ok, result.detail
     assert killed
     assert "taskkill" in killed[0]
+
+
+def test_the_uninstall_fails_when_the_process_survives(
+    adapter, schtasks, pid_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process that keeps running must not be reported as removed."""
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    def fake_run(argv, *, timeout=30.0, **kwargs):
+        return CommandResult(("",), 0, "", "")
+
+    monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+    monkeypatch.setattr("dontneed_dns.core.system.process_alive", lambda pid: True)
+    # The adapter must not wait ten seconds for a process that never dies.
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_ATTEMPTS", 2)
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_INTERVAL", 0.01)
+
+    result = adapter.uninstall(Component.DNS, scope="user")
+
+    assert not result.ok
+    assert "still running" in result.detail
+
+
+def test_the_stop_fails_when_the_process_survives(
+    adapter, schtasks, config_path, pid_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``stop`` must not report a success it cannot prove.
+
+    The taskkill command can succeed while the process survives it.  The
+    component would then keep the port and the next start would fail, so
+    the failure has to be reported.
+    """
+    adapter.install(Component.DNS, scope="user")
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    def fake_run(argv, *, timeout=30.0, **kwargs):
+        return CommandResult(("",), 0, "", "")
+
+    monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+    monkeypatch.setattr("dontneed_dns.core.system.process_alive", lambda pid: True)
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_ATTEMPTS", 2)
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_INTERVAL", 0.01)
+
+    result = adapter.stop(Component.DNS)
+
+    assert not result.ok
+    assert "still running" in result.detail
+
+
+def test_the_stop_terminates_a_process_that_the_task_does_not_own(
+    adapter, schtasks, config_path, pid_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process that was started by hand has to be stopped as well."""
+    adapter.install(Component.DNS, scope="user")
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    killed: list[list[str]] = []
+    alive = {"value": True}
+
+    def fake_run(argv, *, timeout=30.0, **kwargs):
+        killed.append(list(argv))
+        alive["value"] = False
+        return CommandResult(("",), 0, "", "")
+
+    monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+    monkeypatch.setattr("dontneed_dns.core.system.process_alive", lambda pid: alive["value"])
+
+    result = adapter.stop(Component.DNS)
+
+    assert result.ok, result.detail
+    assert any("taskkill" in call for call in killed)
+
+
+def test_the_restart_does_not_start_after_a_failed_stop(
+    adapter, schtasks, config_path, pid_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Starting again after a failed stop would fail with "port in use"."""
+    adapter.install(Component.DNS, scope="user")
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+
+    def fake_run(argv, *, timeout=30.0, **kwargs):
+        return CommandResult(("",), 0, "", "")
+
+    monkeypatch.setattr(windows_adapter, "run_command", fake_run)
+    monkeypatch.setattr("dontneed_dns.core.system.process_alive", lambda pid: True)
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_ATTEMPTS", 2)
+    monkeypatch.setattr(windows_adapter, "PROCESS_STOP_INTERVAL", 0.01)
+
+    result = adapter.restart(Component.DNS)
+
+    assert not result.ok
+    assert not schtasks.called("/Run")
 
 
 def test_a_repeated_uninstall_works(adapter, schtasks, config_path) -> None:
@@ -374,7 +486,34 @@ def test_a_missing_log_file_is_not_an_error(adapter, tmp_path, monkeypatch) -> N
     assert result.data["output"] == ""
 
 
-def test_the_diagnostics_describe_the_installation(adapter) -> None:
+def test_a_task_of_another_account_is_not_installed(adapter, schtasks, config_path) -> None:
+    """The installation fails when the task runs as another account.
+
+    The principal of the task decides whose account the component runs
+    under.  A task of another account has to be reported as a failed
+    installation instead of a successful one.
+    """
+    original = adapter.tasks.create_from_definition
+
+    def create_for_another_user(task_name, definition):
+        result = original(task_name, definition)
+        xml = schtasks.tasks[task_name]
+        start = xml.index("<Principals>")
+        end = xml.index("</Principal>")
+        schtasks.tasks[task_name] = (
+            xml[:start] + xml[start:end].replace(definition.user_id, "OTHER\\someone") + xml[end:]
+        )
+        return result
+
+    adapter.tasks.create_from_definition = create_for_another_user  # type: ignore[method-assign]
+
+    result = adapter.install(Component.DNS, scope="user")
+
+    assert not result.ok
+    assert "does not match" in result.message
+
+
+def test_the_diagnostics_describe_the_installation(adapter, schtasks) -> None:
     data = adapter.diagnostics()
     assert data["platform"] == "windows"
     assert data["backend"] == "scheduled-task"
@@ -447,6 +586,7 @@ def test_the_mechanism_of_the_working_directory(tmp_path: Path) -> None:
         cwd=tmp_path,
         env=environment,
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
     )
@@ -467,6 +607,7 @@ def test_the_service_runner_starts_from_the_working_directory(adapter) -> None:
         cwd=definition.working_directory,
         env=environment,
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
     )

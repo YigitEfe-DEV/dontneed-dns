@@ -13,6 +13,22 @@ from dontneed_dns.core.dnsmessage import encode_name
 from dontneed_dns.core.doh import DohProvider
 
 
+@pytest.fixture(autouse=True)
+def _no_upstream_traffic(monkeypatch: pytest.MonkeyPatch):
+    """Keep the test suite away from the network.
+
+    The health check asks the DNS-over-HTTPS providers directly, so that
+    it can tell whether a split domain was answered over DNS-over-HTTPS
+    or by the system resolver.  A test suite that depends on the internet
+    is slow and fails for reasons that have nothing to do with the
+    project, so the probe is replaced here.  The probe itself is covered
+    by ``tests/unit/test_health.py``.
+    """
+    from dontneed_dns.core import health
+
+    monkeypatch.setattr(health, "_doh_probe", lambda config, timeout: (True, "answered over DNS-over-HTTPS"))
+
+
 @pytest.fixture
 def provider() -> DohProvider:
     """A provider that is never contacted."""

@@ -7,6 +7,7 @@ arguments of the command line.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,32 @@ from dontneed_dns.core.system import CommandResult
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 
 ACCESS_DENIED = "ERROR: Access is denied."
+
+
+def disable_the_task(xml: str) -> str:
+    """Return the definition of a task that was disabled.
+
+    Only the ``<Enabled>`` element of the settings is changed.  A task
+    definition holds a second one in the trigger, and that one says whether
+    the trigger is active; the Task Scheduler leaves it alone when the task
+    is disabled.
+    """
+    match = re.search(r"<Settings>.*?</Settings>", xml, re.DOTALL)
+    assert match is not None, "the definition has no settings"
+    block = match.group(0)
+    disabled = block.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")
+    assert disabled != block, "the settings carry no state"
+    return xml[: match.start()] + disabled + xml[match.end() :]
+
+
+def disable_the_trigger(xml: str) -> str:
+    """Return the definition of a task whose logon trigger is disabled."""
+    match = re.search(r"<LogonTrigger>.*?</LogonTrigger>", xml, re.DOTALL)
+    assert match is not None, "the definition has no trigger"
+    block = match.group(0)
+    disabled = block.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")
+    assert disabled != block, "the trigger carries no state"
+    return xml[: match.start()] + disabled + xml[match.end() :]
 
 
 def build_xml(command: str, arguments: str = "", user: str = "") -> str:

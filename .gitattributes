@@ -1,0 +1,15 @@
+# The shell scripts are checked with "bash -n" on every platform.  A file
+# with Windows line endings is a syntax error for the shell.
+*.sh text eol=lf
+install.sh text eol=lf
+uninstall.sh text eol=lf
+
+# The PowerShell scripts are read by Windows PowerShell, which expects the
+# line endings of Windows.
+*.ps1 text eol=crlf
+
+# The sources and the documentation are read by everybody.
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf

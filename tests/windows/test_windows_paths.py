@@ -47,6 +47,20 @@ def test_the_pid_file_is_the_one_of_the_service_runner() -> None:
     assert win_paths.pid_file("dontneed-dns-dns") == core_paths.pid_file("dontneed-dns-dns")
 
 
+def test_the_log_file_is_the_one_of_the_service_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reader and the writer of the log file have to agree.
+
+    The service runner writes the log with the core module and the adapter
+    reads it with the Windows module.  Two different paths would mean that
+    ``dontneed-dns logs`` never finds the file that was written.
+    """
+    from dontneed_dns.core import paths as core_paths
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")
+    assert win_paths.log_path() == core_paths.log_path()
+
+
 def test_the_program_data_directory_is_used_for_system_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

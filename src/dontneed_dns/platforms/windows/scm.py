@@ -85,13 +85,20 @@ class ServiceControlManagerBackend:
     # -- actions ----------------------------------------------------------
 
     def create(self, service_name: str, binary_path: str, *, display_name: str) -> CommandResult:
-        """Create the service."""
+        """Create the service.
+
+        ``sc.exe`` does not use the rules of the command line for the path
+        of the program: the whole value has to be one quoted argument, and
+        the quotes inside it have to be escaped.  Without that a path with
+        a space in it is cut off and the service cannot be started.
+        """
+        escaped = binary_path.replace('"', '\\"')
         return run_command(
             [
                 "sc",
                 "create",
                 service_name,
-                f"binPath= {binary_path}",
+                f'binPath= "{escaped}"',
                 "start=",
                 "auto",
                 f"DisplayName= {display_name}",

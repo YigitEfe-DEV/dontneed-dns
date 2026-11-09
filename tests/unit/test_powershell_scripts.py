@@ -35,6 +35,7 @@ def _run_script(script: Path, arguments: list[str], env: dict[str, str]) -> subp
     return subprocess.run(
         [PWSH or "pwsh", "-NoProfile", "-File", str(script), *arguments],
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
         env=env,
@@ -99,11 +100,34 @@ def test_the_installation_scripts_parse() -> None:
             str(PROJECT_ROOT / "scripts" / "check_powershell.ps1"),
         ],
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "syntax ok" in completed.stdout
+
+
+def test_a_missing_executable_is_reported(tmp_path: Path, windows_env) -> None:
+    """A package without the executable must not look like a success.
+
+    The script needs no executable to reach this point, so the test runs on
+    every platform; the workflow checks the same path with the real script
+    on the Windows runner.
+    """
+    package = tmp_path / "package"
+    package.mkdir(parents=True)
+    shutil.copy2(PACKAGING / "windows" / "install.ps1", package / "install.ps1")
+
+    completed = _run_script(package / "install.ps1", [], windows_env)
+
+    assert completed.returncode != 0
+    output = completed.stdout + completed.stderr
+    assert "not found" in output
+    # The reason has to be kept for a bug report.
+    log_file = Path(windows_env["LOCALAPPDATA"]) / "dontneed-dns" / "install-output.txt"
+    assert log_file.exists(), output
+    assert "not found" in log_file.read_text(encoding="utf-8")
 
 
 @posix_only

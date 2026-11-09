@@ -62,6 +62,13 @@ class SystemResolver(ABC):
         """Whether this resolver can answer questions of the given type."""
         return True
 
+    def close(self) -> None:  # noqa: B027 - the default does nothing on purpose
+        """Release the resources of the resolver.
+
+        The base implementation does nothing; the resolvers that change a
+        process wide setting restore it here.
+        """
+
 
 def read_resolv_conf_nameservers(path: str | os.PathLike[str] = RESOLV_CONF) -> list[str]:
     """Return the nameserver addresses configured in ``resolv.conf``."""
@@ -161,7 +168,12 @@ class GetAddrInfoResolver(SystemResolver):
     def __init__(self, timeout: float = 3.0) -> None:
         self.timeout = timeout
         self._previous_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(self.timeout)
+        # ``getaddrinfo`` has no timeout of its own, so the default timeout
+        # of the process is used for it.  An explicitly configured default is
+        # left alone: the caller knows why it set it.
+        self._changed_timeout = self._previous_timeout is None
+        if self._changed_timeout:
+            socket.setdefaulttimeout(self.timeout)
 
     def supports_type(self, qtype: int) -> bool:
         return qtype in (DNS_TYPE_A, DNS_TYPE_AAAA)
@@ -194,13 +206,17 @@ class GetAddrInfoResolver(SystemResolver):
         for info in infos:
             sockaddr = info[4]
             address = sockaddr[0]
+            if not isinstance(address, str):
+                continue
             if address not in addresses:
                 addresses.append(address)
         return build_address_response(wire, addresses)
 
     def close(self) -> None:
         """Restore the global socket timeout."""
-        socket.setdefaulttimeout(self._previous_timeout)
+        if self._changed_timeout:
+            socket.setdefaulttimeout(self._previous_timeout)
+            self._changed_timeout = False
 
 
 def create_system_resolver(timeout: float = 3.0) -> SystemResolver:

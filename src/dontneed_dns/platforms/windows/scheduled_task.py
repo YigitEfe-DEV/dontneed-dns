@@ -179,6 +179,60 @@ def _escape(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _tag(element: ElementTree.Element) -> str:
+    """The name of an element without its namespace."""
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _child_text(element: ElementTree.Element, name: str) -> str:
+    """The text of the first direct child called ``name``."""
+    for child in element:
+        if _tag(child) == name and child.text:
+            return child.text.strip()
+    return ""
+
+
+def _task_enabled(root: ElementTree.Element) -> bool | None:
+    """Whether the task itself is enabled.
+
+    A task definition holds more than one ``<Enabled>`` element.  The one of
+    the trigger says whether the *trigger* is active, the one of the settings
+    says whether the *task* is active.  They are independent: disabling a
+    task leaves the trigger enabled, so the first element of the document
+    would report a disabled task as enabled.
+
+    Returns ``None`` when the definition holds neither.
+    """
+    for element in root.iter():
+        if _tag(element) == "Settings":
+            value = _child_text(element, "Enabled")
+            if value:
+                return value.lower() == "true"
+            break
+    # A definition without settings is unusual; fall back to the first
+    # element that carries the state.
+    for element in root.iter():
+        if _tag(element) == "Enabled" and element.text:
+            return element.text.strip().lower() == "true"
+    return None
+
+
+def _principal_user(root: ElementTree.Element) -> str:
+    """The account the task runs as."""
+    for element in root.iter():
+        if _tag(element) == "Principal":
+            return _child_text(element, "UserId")
+    return ""
+
+
+def _trigger_user(root: ElementTree.Element) -> str:
+    """The account whose logon triggers the task."""
+    for element in root.iter():
+        if _tag(element) == "LogonTrigger":
+            return _child_text(element, "UserId")
+    return ""
+
+
 def build_task_xml(definition: TaskDefinition) -> str:
     """Build the XML definition of a scheduled task."""
     user = _escape(definition.user_id)
@@ -274,10 +328,7 @@ class ScheduledTaskBackend:
             root = ElementTree.fromstring(xml)
         except ElementTree.ParseError:
             return None
-        for element in root.iter():
-            if element.tag.endswith("Enabled") and element.text is not None:
-                return element.text.strip().lower() == "true"
-        return None
+        return _task_enabled(root)
 
     def read_pid(self, pid_path: Path) -> int | None:
         """Read a PID file."""
@@ -372,25 +423,31 @@ class ScheduledTaskBackend:
         command = ""
         arguments = ""
         working_directory = ""
-        user = ""
         for element in root.iter():
-            tag = element.tag.rsplit("}", 1)[-1]
+            tag = _tag(element)
             if tag == "Command" and element.text:
                 command = element.text.strip()
             elif tag == "Arguments" and element.text:
                 arguments = element.text.strip()
             elif tag == "WorkingDirectory" and element.text:
                 working_directory = element.text.strip()
-            elif tag == "UserId" and element.text and not user:
-                user = element.text.strip()
+
+        # The account the task *runs as* is the principal; the account of the
+        # logon trigger is a different thing.  Both are checked, because a
+        # task that runs as another account would answer with the data of
+        # that account and not with the data of the current user.
+        principal = _principal_user(root)
+        trigger = _trigger_user(root)
 
         problems: list[str] = []
         if command.lower() != definition.command.lower():
             problems.append(f"the command is {command!r} instead of {definition.command!r}")
         if arguments != definition.arguments:
             problems.append(f"the arguments are {arguments!r} instead of {definition.arguments!r}")
-        if definition.user_id and user and not _same_user(user, definition.user_id):
-            problems.append(f"the task belongs to {user!r} instead of {definition.user_id!r}")
+        if definition.user_id and principal and not _same_user(principal, definition.user_id):
+            problems.append(f"the task runs as {principal!r} instead of {definition.user_id!r}")
+        if definition.user_id and trigger and not _same_user(trigger, definition.user_id):
+            problems.append(f"the logon trigger belongs to {trigger!r} instead of {definition.user_id!r}")
         if (
             check_working_directory
             and definition.working_directory
@@ -404,7 +461,7 @@ class ScheduledTaskBackend:
             return TaskVerification(False, "; ".join(problems))
         return TaskVerification(
             True,
-            f"the task runs {definition.command_line()} as {user or 'the current user'}",
+            f"the task runs {definition.command_line()} as {principal or 'the current user'}",
         )
 
     def run(self, task_name: str) -> CommandResult:

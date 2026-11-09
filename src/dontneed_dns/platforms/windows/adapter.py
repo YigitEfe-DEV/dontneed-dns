@@ -16,6 +16,8 @@ Two backends are available:
 from __future__ import annotations
 
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,13 +51,31 @@ _DISPLAY_NAMES = {
     Component.PROXY: "dontneed-dns proxy",
 }
 
+#: How often the process of a component is checked after it was killed.
+PROCESS_STOP_ATTEMPTS = 20
+#: How long the adapter waits between two checks.
+PROCESS_STOP_INTERVAL = 0.5
+
+
+@dataclass(frozen=True)
+class ProcessStop:
+    """The outcome of stopping the process of a component."""
+
+    #: Whether a process was running at all.
+    was_running: bool = False
+    #: Whether the process is gone.
+    stopped: bool = True
+    #: Why it is not gone.
+    detail: str = ""
+
 
 def _is_admin() -> bool:
     """``True`` when the process runs elevated."""
     try:
         import ctypes
 
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        # ``windll`` only exists on Windows.
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 - not Windows
         return False
 
@@ -93,7 +113,9 @@ class WindowsPlatformAdapter(PlatformAdapter):
         """A short description of the host."""
         version = ""
         try:
-            version = f"Windows {sys.getwindowsversion().major}.{sys.getwindowsversion().minor}"
+            # ``getwindowsversion`` only exists on Windows.
+            info = sys.getwindowsversion()  # type: ignore[attr-defined]
+            version = f"Windows {info.major}.{info.minor}"
         except Exception:  # noqa: BLE001 - defensive
             version = "Windows"
         return f"{version}, {self.backend_name} backend"
@@ -188,39 +210,70 @@ class WindowsPlatformAdapter(PlatformAdapter):
 
         return pid if process_alive(pid) else None
 
+    def _stop_process(self, component: Component) -> ProcessStop:
+        """Stop the process of a component.
+
+        The process is not necessarily owned by the scheduled task: it can
+        have been started by hand or the registration can have failed.  Such
+        a process belongs to this project and has to be stopped as well,
+        otherwise it keeps the port and the next start fails.
+
+        The result says whether the process is really gone.  Reporting the
+        success of ``taskkill`` is not enough: the command can succeed while
+        the process survives it.
+        """
+        pid = self.running_pid(component)
+        if pid is None:
+            return ProcessStop(was_running=False, stopped=True)
+
+        result = run_command(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=30)
+        if not result.ok:
+            return ProcessStop(was_running=True, stopped=False, detail=describe_failure(result))
+
+        # The process needs a moment to disappear.
+        for _attempt in range(PROCESS_STOP_ATTEMPTS):
+            if self.running_pid(component) is None:
+                return ProcessStop(was_running=True, stopped=True)
+            time.sleep(PROCESS_STOP_INTERVAL)
+        return ProcessStop(
+            was_running=True,
+            stopped=False,
+            detail=f"the process {pid} of the {component.label} is still running",
+        )
+
     # -- lifecycle --------------------------------------------------------
 
     def status(self, component: Component) -> ServiceState:
         """Return the state of ``component``."""
         if self.backend_name == "windows-service":
-            info = self.scm.info(_SERVICE_NAMES[component])
-            if not info.exists:
+            service = self.scm.info(_SERVICE_NAMES[component])
+            if not service.exists:
                 if self.running_pid(component) is not None:
                     return ServiceState.RUNNING_UNREGISTERED
                 return ServiceState.NOT_INSTALLED
-            if info.running:
+            if service.running:
                 return ServiceState.RUNNING
             return ServiceState.STOPPED
 
-        info = self._info(component)
-        if not info.exists:
+        task = self._info(component)
+        if not task.exists:
             # A process can run without a task, for example when it was
             # started by hand or when the registration failed.  That is not
             # an installation, so it is reported separately.
             if self.running_pid(component) is not None:
                 return ServiceState.RUNNING_UNREGISTERED
             return ServiceState.NOT_INSTALLED
-        if info.running:
+        if task.running:
             return ServiceState.RUNNING
         return ServiceState.STOPPED
 
     def is_enabled(self, component: Component) -> bool | None:
         """Return whether the component starts automatically."""
         if self.backend_name == "windows-service":
-            info = self.scm.info(_SERVICE_NAMES[component])
-            if not info.exists:
+            service = self.scm.info(_SERVICE_NAMES[component])
+            if not service.exists:
                 return None
-            return info.start_type.lower().startswith("auto")
+            return service.start_type.lower().startswith("auto")
         return self.tasks.is_enabled(self._task_name(component))
 
     def start(self, component: Component) -> OperationResult:
@@ -263,28 +316,33 @@ class WindowsPlatformAdapter(PlatformAdapter):
 
         name = self._task_name(component)
         result = self.tasks.end(name)
-        stopped = result.ok
-        pid = self.tasks.read_pid(self._pid_path(component))
-        if pid is not None:
-            from dontneed_dns.core.system import process_alive
 
-            if process_alive(pid):
-                # The task did not stop the process; terminate it directly.
-                run_command(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=30)
-                stopped = True
+        # The task does not necessarily own the process.  A component that
+        # was started by hand keeps the port, so it is terminated directly
+        # and it is checked that it is really gone.
+        outcome = self._stop_process(component)
+        if not outcome.stopped:
+            return OperationResult.failure(f"the task {name} could not be stopped.", detail=outcome.detail)
+
         try:
             self._pid_path(component).unlink()
         except OSError:
             pass
-        if stopped:
+
+        if outcome.was_running:
             return OperationResult.success(f"the task {name} was stopped.", changed=True)
-        return OperationResult.failure(
-            f"the task {name} could not be stopped.", detail=describe_failure(result)
-        )
+        if not result.ok:
+            return OperationResult.failure(
+                f"the task {name} could not be stopped.", detail=describe_failure(result)
+            )
+        return OperationResult.success(f"the task {name} was stopped.", changed=True)
 
     def restart(self, component: Component) -> OperationResult:
         """Restart ``component``."""
-        self.stop(component)
+        stopped = self.stop(component)
+        if not stopped.ok:
+            # Starting again would fail with "the port is already in use".
+            return stopped
         return self.start(component)
 
     def enable(self, component: Component) -> OperationResult:
@@ -452,9 +510,13 @@ class WindowsPlatformAdapter(PlatformAdapter):
 
         # A process that runs without a task belongs to this project as
         # well and has to be stopped, otherwise it would keep the port.
-        pid = self.running_pid(component)
-        if pid is not None:
-            run_command(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=30)
+        outcome = self._stop_process(component)
+        if not outcome.stopped:
+            return OperationResult.failure(
+                f"the task {name} was removed but a process is still running.",
+                detail=outcome.detail,
+            )
+        if outcome.was_running:
             changed = True
 
         try:

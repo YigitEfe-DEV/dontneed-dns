@@ -23,7 +23,7 @@ from dontneed_dns.core.dnsmessage import build_error_response, parse_message
 from dontneed_dns.core.errors import DNSProtocolError
 from dontneed_dns.core.logging_setup import get_logger
 from dontneed_dns.core.resolver import SplitResolver
-from dontneed_dns.core.system import close_listener, port_in_use
+from dontneed_dns.core.system import close_listener, port_in_use, udp_port_in_use
 
 __all__ = ["DnsServer"]
 
@@ -45,7 +45,7 @@ class DnsServer:
         host_v6: str | None = "::1",
         enable_tcp: bool = True,
         max_concurrency: int = 64,
-        on_query: Callable[[str, str], None] | None = None,
+        on_query: Callable[[str, int], None] | None = None,
     ) -> None:
         self.resolver = resolver
         self.host = host
@@ -79,11 +79,8 @@ class DnsServer:
 
     def bind(self) -> None:
         """Open the listening sockets. Raises ``OSError`` when the port is busy."""
-        if self._requested_port != 0 and port_in_use(self.host, self._requested_port):
-            raise OSError(
-                f"the port {self._requested_port} on {self.host} is already in use; "
-                "another instance of the resolver is probably running"
-            )
+        if self._requested_port != 0:
+            self._check_port_is_free()
         self._executor = ThreadPoolExecutor(max_workers=self.max_concurrency, thread_name_prefix="dns")
         try:
             chosen = self._bind_family(self.host, self._requested_port)
@@ -98,6 +95,27 @@ class DnsServer:
         except Exception:
             self.close()
             raise
+
+    def _check_port_is_free(self) -> None:
+        """Refuse to start when the port is already taken.
+
+        The server needs the port for TCP and for UDP at the same time.  A
+        conflict on only one of them is enough to break the resolver, and
+        Windows shares an address between sockets more willingly than Linux
+        does, so the conflict has to be looked for explicitly instead of
+        relying on the bind to fail.
+        """
+        port = self._requested_port
+        if port_in_use(self.host, port):
+            raise OSError(
+                f"the port {port} on {self.host} is already in use; "
+                "another instance of the resolver is probably running"
+            )
+        if udp_port_in_use(self.host, port):
+            raise OSError(
+                f"the port {port} on {self.host} is already in use for datagram traffic; "
+                "another program holds the port"
+            )
 
     def _bind_family(self, host: str, port: int) -> int:
         """Bind the UDP and the TCP listener of one address family.

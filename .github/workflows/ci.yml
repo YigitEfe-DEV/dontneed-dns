@@ -32,10 +32,13 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Check the formatting
-        run: ruff format --check src/ tests/
+        run: ruff format --check src/ tests/ scripts/
 
       - name: Run the linter
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ scripts/
+
+      - name: Check the types
+        run: mypy
 
   test-linux:
     name: Tests (Linux, ${{ matrix.python-version }})
@@ -171,6 +174,22 @@ jobs:
           Expand-Archive dist/dontneed-dns-windows-x86_64.zip -DestinationPath package -Force
           Get-ChildItem package/dontneed-dns-windows-x86_64
 
+      - name: Check that a missing executable is reported
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $package = "package/dontneed-dns-windows-x86_64"
+          # A directory without the executable has to be reported and has
+          # to leave a log file behind.
+          $empty = "package/without-executable"
+          New-Item -ItemType Directory -Force -Path $empty | Out-Null
+          Copy-Item (Join-Path $package 'install.ps1') $empty
+          & (Join-Path $empty 'install.ps1')
+          if ($LASTEXITCODE -eq 0) { throw "the installer did not report the missing executable" }
+          $log = "$env:LOCALAPPDATA\dontneed-dns\install-output.txt"
+          if (-not (Test-Path $log)) { throw "the installer wrote no log file" }
+          exit 0
+
       - name: Install and check that the tasks exist
         shell: pwsh
         run: |
@@ -186,6 +205,8 @@ jobs:
             if (-not ($xml -match 'dontneed-dns.exe')) { throw "the task $task runs another program" }
           }
           & "$env:LOCALAPPDATA\dontneed-dns\dontneed-dns.exe" status
+          if ($LASTEXITCODE -ne 0) { throw "the installed command failed" }
+          exit 0
 
       - name: Start the components through the tasks and check the listeners
         shell: pwsh
@@ -205,7 +226,23 @@ jobs:
           # The health check connects over TCP and sends a real query.
           & $exe check
           if ($LASTEXITCODE -ne 0) { throw "the health check failed" }
-          & $exe logs -n 10 || true
+          # The log command is allowed to fail; the log file is empty when
+          # the components wrote nothing yet.
+          & $exe logs -n 10
+          $global:LASTEXITCODE = 0
+          exit 0
+
+      - name: Check that the autostart state is read back
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\dontneed-dns\dontneed-dns.exe"
+          & $exe dns disable
+          if ($LASTEXITCODE -ne 0) { throw "the task could not be disabled" }
+          python -c "from dontneed_dns.platforms.windows.adapter import WindowsPlatformAdapter; from dontneed_dns.platforms.base import Component; a = WindowsPlatformAdapter(); assert a.is_enabled(Component.DNS) is False, 'a disabled task is reported as enabled'; assert a.is_enabled(Component.PROXY) is True, 'an enabled task is reported as disabled'"
+          & $exe dns enable
+          if ($LASTEXITCODE -ne 0) { throw "the task could not be enabled" }
+          python -c "from dontneed_dns.platforms.windows.adapter import WindowsPlatformAdapter; from dontneed_dns.platforms.base import Component; a = WindowsPlatformAdapter(); assert a.is_enabled(Component.DNS) is True, 'an enabled task is reported as disabled'"
+          exit 0
 
       - name: Uninstall and check that the tasks are gone
         shell: pwsh
@@ -214,10 +251,15 @@ jobs:
           $package = "package/dontneed-dns-windows-x86_64"
           & (Join-Path $package 'uninstall.ps1')
           foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
-            schtasks /Query /TN $task
+            schtasks /Query /TN $task | Out-Null
             if ($LASTEXITCODE -eq 0) { throw "the task $task still exists" }
           }
           # The processes have to be gone as well.
           Start-Sleep -Seconds 3
           $running = Get-Process dontneed-dns -ErrorAction SilentlyContinue
           if ($running) { throw "a process of the project is still running" }
+          # The query of a task that no longer exists ends with a non zero
+          # status, and a cmdlet does not reset it.  The step must not
+          # inherit it, or a successful uninstall looks like a failure.
+          $global:LASTEXITCODE = 0
+          exit 0

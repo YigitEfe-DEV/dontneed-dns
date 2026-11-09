@@ -243,6 +243,12 @@ def test_a_doh_client_is_built_from_the_configuration() -> None:
 
     config = Config()
     resolver = build_resolver(config)
-    assert resolver.doh.providers
-    assert resolver.should_route_to_doh("discord.com") is True
-    assert resolver.should_route_to_doh("example.org") is False
+    try:
+        assert resolver.doh.providers
+        assert resolver.should_route_to_doh("discord.com") is True
+        assert resolver.should_route_to_doh("example.org") is False
+    finally:
+        # The system resolver changes the default timeout of the process.
+        # Without this it would change the behaviour of the tests that come
+        # after it.
+        resolver.close()
