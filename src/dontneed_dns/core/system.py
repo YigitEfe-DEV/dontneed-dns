@@ -32,8 +32,19 @@ __all__ = [
     "port_in_use",
     "process_alive",
     "run_command",
+    "udp_port_in_use",
     "which",
 ]
+
+#: ``SO_EXCLUSIVEADDRUSE`` from ``winsock2.h``.  The constant is not part of
+#: the portable ``socket`` module, so the value is kept here as well.
+SO_EXCLUSIVEADDRUSE = 0x00008007
+
+#: The exit code Windows reports for a process that is still running.
+_STILL_ACTIVE = 259
+
+#: ``PROCESS_QUERY_LIMITED_INFORMATION``; enough to ask for the exit code.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 @dataclass(frozen=True)
@@ -143,7 +154,7 @@ def is_root() -> bool:
     """``True`` when the current process runs with root privileges."""
     if is_windows():
         return False
-    return os.geteuid() == 0  # type: ignore[attr-defined]
+    return os.geteuid() == 0
 
 
 def is_windows() -> bool:
@@ -159,11 +170,16 @@ def is_linux() -> bool:
 def process_alive(pid: int) -> bool:
     """Return ``True`` when a process with ``pid`` exists.
 
-    On Windows this uses ``tasklist``; on POSIX it sends signal ``0``.
+    On Windows the kernel is asked directly, so the answer does not depend on
+    ``tasklist`` being installed and on the language of its output.  Only when
+    the kernel call is not available the external command is used.
     """
     if pid <= 0:
         return False
     if is_windows():
+        alive = _windows_process_alive(pid)
+        if alive is not None:
+            return alive
         result = run_command(["tasklist", "/FI", f"PID eq {pid}", "/NH"], timeout=10)
         return result.ok and str(pid) in result.stdout
     try:
@@ -175,6 +191,64 @@ def process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _windows_process_alive(pid: int) -> bool | None:
+    """Ask the Windows kernel whether the process exists.
+
+    Returns ``None`` when the question cannot be answered, so that the caller
+    can fall back to ``tasklist``.  A process that exists but belongs to
+    another account is reported as alive: it cannot be opened for the query,
+    but it is certainly running.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # noqa: BLE001 - not Windows
+        return None
+
+    try:
+        # ``WinDLL`` only exists on Windows.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - no kernel32
+        return None
+
+    try:
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+    except Exception:  # noqa: BLE001 - defensive
+        return None
+
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # ``get_last_error`` only exists on Windows.
+        error = ctypes.get_last_error()  # type: ignore[attr-defined]
+        if error == 87:  # ERROR_INVALID_PARAMETER: no such process
+            return False
+        if error == 5:  # ERROR_ACCESS_DENIED: it exists, it is not ours
+            return True
+        return None
+
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return None
+        return code.value == _STILL_ACTIVE
+    except Exception:  # noqa: BLE001 - defensive
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def close_listener(sock: socket.socket) -> None:
@@ -211,3 +285,34 @@ def port_in_use(host: str, port: int, *, timeout: float = 0.5) -> bool:
     except OSError:
         return False
     return True
+
+
+def udp_port_in_use(host: str, port: int) -> bool:
+    """Return ``True`` when a datagram socket cannot claim the address.
+
+    A datagram socket cannot be probed by connecting to it, so the conflict
+    is found by trying to bind the address.  The probe is deliberately
+    *exclusive*: it does not ask for the address to be shared, so that it
+    fails no matter how the socket that holds the port was created.  On
+    Windows that means ``SO_EXCLUSIVEADDRUSE``, which refuses the bind even
+    when the other socket used ``SO_REUSEADDR``.
+
+    Datagram sockets never enter the ``TIME_WAIT`` state, so the probe
+    cannot report a port that is only waiting to expire.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        if is_windows():
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
+            except OSError:
+                # The option is not supported by this build; the plain bind
+                # still refuses a port that is held by another socket.
+                pass
+        sock.bind((host, port))
+    except OSError:
+        return True
+    finally:
+        sock.close()
+    return False

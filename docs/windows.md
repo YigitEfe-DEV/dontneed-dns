@@ -84,15 +84,25 @@ of `schtasks`.  Two reasons:
 The task has no execution time limit, so the proxy is not stopped after the
 default of 72 hours.
 
-The task starts in the directory of the package.  `python -m` puts the
-current directory at the beginning of `sys.path`, so the package is found
-even when it is not installed in the interpreter that runs the task.  A
-scheduled task runs no shell, so the module path cannot be set with a
-shell operator.
+The task starts in the directory of the program it runs.  For the portable
+build that is the directory of the installed executable; for an installation
+from the sources it is the directory of the package, because `python -m`
+puts the current directory at the beginning of `sys.path` and the package
+is then found even when it is not installed in the interpreter that runs the
+task.  A scheduled task runs no shell, so the module path cannot be set
+with a shell operator.
 
 Every task is read back after it was created.  A task that exists but runs
 another command or belongs to another account is reported as a failed
-installation instead of a successful one.
+installation instead of a successful one.  The account that is compared is
+the *principal* of the task, which decides whose account the component runs
+under; the account of the logon trigger is a different thing and is checked
+as well.
+
+The state of the task is read from the `<Enabled>` element of its settings,
+not from the one of its trigger.  Disabling a task leaves the trigger
+enabled, so reading the first element of the definition would report a
+disabled task as enabled.
 
 Inspect them with:
 
@@ -196,12 +206,23 @@ resolver; because the Windows resolver cannot be queried with a raw DNS
 message from Python, only A and AAAA records are synthesised for the system
 fallback.  Every other record type is answered over DNS-over-HTTPS.
 
+The resolver needs the port for TCP and for datagram traffic at the same
+time, because a client that receives a truncated answer retries over TCP.
+Both are checked before the server starts, and a program that holds only
+one of them is reported as a conflict.  On Windows a port can be shared
+between two sockets more easily than on Linux, so the conflict is looked
+for explicitly instead of relying on the bind to fail.
+
 ## Logs
 
 ```powershell
 dontneed-dns logs -n 100
 Get-Content "$env:LOCALAPPDATA\dontneed-dns\logs\dontneed-dns.log" -Tail 100
 ```
+
+A scheduled task has no console to write to, so the log file is the only
+place where the output of the components ends up.  It is always written;
+the location can be changed with `logging.file` in the configuration.
 
 ## Uninstall
 
@@ -215,11 +236,20 @@ The uninstall removes the scheduled tasks, the executable and the log files.
 The configuration in `%APPDATA%\dontneed-dns` is kept unless `-Purge` is
 given.
 
+The script removes the scheduled tasks by their name and not through the
+installed program.  The installation can also live in a virtual
+environment, and a task that points at a program that no longer exists
+would fail at every logon.  A running program keeps its file locked on
+Windows, so the removal of the directory is repeated until it worked; if
+the directory is still there afterwards, the script says so instead of
+reporting a success it cannot prove.
+
 ## The digital signature
 
 The executable is **not signed**.  Windows shows a warning the first time
-it is started.  The archive contains the SHA-256 checksum of every file;
-compare it with the `SHA256SUMS` file of the release.
+it is started.  The release page carries a `SHA256SUMS` file with the
+SHA-256 checksum of every published file; compare the checksum of the
+archive with it before doing anything about the warning.
 
 ## Troubleshooting
 

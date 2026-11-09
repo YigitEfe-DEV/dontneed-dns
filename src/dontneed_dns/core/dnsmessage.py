@@ -13,7 +13,7 @@ on the *domain name* rather than on raw bytes.
 from __future__ import annotations
 
 import struct
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from dontneed_dns.core.constants import (
@@ -256,7 +256,7 @@ def normalize_domain(name: str) -> str:
     return name.strip().rstrip(".").lower()
 
 
-def matches_domain(name: str, domains: object) -> bool:
+def matches_domain(name: str, domains: Iterable[str]) -> bool:
     """Return ``True`` when ``name`` is one of ``domains`` or a subdomain.
 
     The comparison is label aware, so ``discord.com`` matches
@@ -265,7 +265,7 @@ def matches_domain(name: str, domains: object) -> bool:
     candidate = normalize_domain(name)
     if not candidate:
         return False
-    for domain in domains:  # type: ignore[union-attr]
+    for domain in domains:
         suffix = normalize_domain(str(domain))
         if not suffix:
             continue

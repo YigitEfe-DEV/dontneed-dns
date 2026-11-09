@@ -31,8 +31,8 @@ jobs:
 
       - name: Check the formatting and the linter
         run: |
-          ruff format --check src/ tests/
-          ruff check src/ tests/
+          ruff format --check src/ tests/ scripts/
+          ruff check src/ tests/ scripts/
 
       - name: Run the tests
         run: |
@@ -67,8 +67,8 @@ jobs:
 
       - name: Check the formatting and the linter
         run: |
-          ruff format --check src/ tests/
-          ruff check src/ tests/
+          ruff format --check src/ tests/ scripts/
+          ruff check src/ tests/ scripts/
 
       - name: Run the tests
         run: |
@@ -103,12 +103,66 @@ jobs:
             dist/dontneed-dns.exe
           if-no-files-found: error
 
+  check-windows-install:
+    name: Check the Windows installation (Windows)
+    needs: [build-windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the archive
+        uses: actions/download-artifact@v4
+        with:
+          name: dontneed-dns-windows-x86_64
+          path: dist
+
+      - name: Unpack the archive
+        shell: pwsh
+        run: |
+          Expand-Archive dist/dontneed-dns-windows-x86_64.zip -DestinationPath package -Force
+
+      - name: Install, start, check and uninstall
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+          $package = "package/dontneed-dns-windows-x86_64"
+          $exe = "$env:LOCALAPPDATA\dontneed-dns\dontneed-dns.exe"
+
+          & (Join-Path $package 'install.ps1')
+          foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
+            schtasks /Query /TN $task | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "the task $task does not exist" }
+          }
+          & $exe dns start
+          if ($LASTEXITCODE -ne 0) { throw "the resolver could not be started" }
+          & $exe proxy start
+          if ($LASTEXITCODE -ne 0) { throw "the proxy could not be started" }
+          Start-Sleep -Seconds 8
+          & $exe check
+          if ($LASTEXITCODE -ne 0) { throw "the health check failed" }
+
+          & (Join-Path $package 'uninstall.ps1')
+          foreach ($task in @('dontneed-dns-dns', 'dontneed-dns-proxy')) {
+            schtasks /Query /TN $task | Out-Null
+            if ($LASTEXITCODE -eq 0) { throw "the task $task still exists" }
+          }
+          Start-Sleep -Seconds 3
+          $running = Get-Process dontneed-dns -ErrorAction SilentlyContinue
+          if ($running) { throw "a process of the project is still running" }
+          $global:LASTEXITCODE = 0
+          exit 0
+
   publish:
     name: Publish the release
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, check-windows-install]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Download the archives
         uses: actions/download-artifact@v4
@@ -119,7 +173,9 @@ jobs:
       - name: Compute the checksums
         run: |
           cd dist
-          sha256sum *.zip *.exe > SHA256SUMS 2>/dev/null || sha256sum *.zip > SHA256SUMS
+          # Every published file has to be listed.  A fallback that leaves
+          # the executable out would publish it without a checksum.
+          sha256sum -- *.zip *.exe > SHA256SUMS
           cat SHA256SUMS
 
       - name: Verify the archives

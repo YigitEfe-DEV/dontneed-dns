@@ -74,6 +74,7 @@ def run_dns(config: Config, stop_event: threading.Event) -> int:
         server.bind()
     except OSError as exc:
         _LOGGER.error("the DNS listener could not be opened: %s", exc.strerror or exc)
+        resolver.close()
         return 1
 
     thread = threading.Thread(target=server.serve_forever, name="dns-server", daemon=True)
@@ -85,6 +86,7 @@ def run_dns(config: Config, stop_event: threading.Event) -> int:
             pass
     finally:
         server.shutdown()
+        resolver.close()
     return 0
 
 
@@ -96,6 +98,7 @@ def run_proxy(config: Config, stop_event: threading.Event) -> int:
         server.bind()
     except OSError as exc:
         _LOGGER.error("the proxy listener could not be opened: %s", exc.strerror or exc)
+        resolver.close()
         return 1
 
     thread = threading.Thread(target=server.serve_forever, name="proxy-server", daemon=True)
@@ -107,6 +110,7 @@ def run_proxy(config: Config, stop_event: threading.Event) -> int:
             pass
     finally:
         server.shutdown()
+        resolver.close()
     return 0
 
 

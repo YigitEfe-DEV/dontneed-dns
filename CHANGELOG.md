@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Repairs the Windows edition.  The Windows job of the workflow had been
+failing on every push, so the behaviour of the edition was not verified on
+a real Windows machine; the workflow is fixed and the findings below were
+made on the runner.
+
+### Fixed
+
+- The state of the automatic startup was read from the wrong element of the
+  task definition.  A task definition holds two `<Enabled>` elements: the
+  one of the trigger says whether the *trigger* is active, the one of the
+  settings says whether the *task* is active.  Disabling a task leaves the
+  trigger enabled, so `dontneed-dns status` reported a disabled task as
+  enabled.
+- `dontneed-dns stop` reported a success it could not prove.  The
+  `taskkill` command can succeed while the process survives it; the
+  component then kept the port and the next start failed with "the port is
+  already in use".  The process is now checked and a failure is reported.
+  The same applies to the uninstall.
+- The uninstall left the scheduled tasks behind when the executable was not
+  at the expected path, for example after an installation from the bundled
+  wheelhouse.  The tasks are now removed by their name.
+- The uninstall reported a success when the directory could not be removed.
+  A running program keeps its file locked on Windows, so the removal is
+  repeated and the result is reported honestly.
+- The Windows edition wrote no log file at all.  The configuration leaves
+  the log file empty, so nothing was ever written, and a scheduled task has
+  no console to write to.  The platform default is now used when the
+  configuration does not name a file.
+- The diagnostic report of `dontneed-dns doctor` contained the home
+  directory of the user on Windows.  The redaction ran on the serialised
+  report, and the JSON encoding escapes the backslashes of a Windows path,
+  so the home directory was no longer recognised.  The redaction now runs
+  on the values of the report.
+- The installation failed when a program wrote to the error stream and
+  still succeeded.  `pip` writes such a notice, so the installation from
+  the wheelhouse could not succeed.
+- The installer only checked that the scheduled tasks existed, not what
+  they run.  The definition is read back and compared now.
+- The installer could pick the Microsoft Store alias of `python.exe`, which
+  opens the Store instead of an interpreter, and it created the virtual
+  environment without a guard, so a failure left no log file.
+- The `sc create` command of the Windows service backend did not quote the
+  path of the program as a whole.  `sc.exe` does not use the rules of the
+  command line, so a path with a space in it was cut off and the service
+  could not be started.
+- The Windows job of the workflow always failed.  The query of a task that
+  no longer exists ends with a non zero status, and a cmdlet does not
+  reset it, so a successful uninstall looked like a failure.
+- A conflict on the datagram port of the resolver was not detected.  The
+  resolver needs the port for TCP and for datagrams at the same time, and
+  a program that holds only the datagram port broke it silently.
+- The process of a component was looked for with `tasklist`, whose output
+  is localised and which is missing on some systems.  The Windows kernel
+  is asked directly now.
+- The system resolver of Windows changed the default timeout of the whole
+  process and never restored it.  It is restored when the component stops.
+- The PowerShell scripts were only parsed with PowerShell 7, while the end
+  user runs them with Windows PowerShell 5.1.  Both engines parse them
+  now.
+
+### Added
+
+- The type checker `mypy` runs over the sources, and the release scripts
+  are linted and formatted like the rest of the project.
+- The release verifies that a Windows archive carries the executable and
+  the installation scripts, and that every published file is listed in the
+  checksum file.
+- The release installs the archive, starts the components, runs the health
+  check and uninstalls them again, so a broken installer cannot be
+  published.
+- The workflow checks that the state of the automatic startup is read back
+  correctly on the Windows runner.
+
 ## [0.1.2] - 2026-10-23
 
 Fixes the two problems of the installation report of a Windows machine and

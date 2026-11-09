@@ -124,6 +124,11 @@ Resolve-DnsName -Server 127.0.0.1 -Port 5354 -Type A discord.com
 
   A port that is already taken is reported as such.  Change
   `dns.listen_port` in the configuration or stop the other program.
+* **"the port 5354 on 127.0.0.1 is already in use for datagram traffic"** -
+  another program holds the port for datagram traffic only.  The resolver
+  needs the port for TCP and for datagrams at the same time, so it refuses
+  to start.  Find the program with
+  `netstat -ano | findstr :5354` and stop it, or change the port.
 * **Only the UDP listener works** - this was a defect of the releases up to
   0.1.1: the IPv6 listener replaced the IPv4 TCP listener and closed its
   port.  Update to 0.1.2 or newer.

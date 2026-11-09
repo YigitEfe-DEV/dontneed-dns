@@ -139,3 +139,14 @@ class SplitResolver:
                 seen.add(address)
                 unique.append(address)
         return unique
+
+    # -- lifecycle --------------------------------------------------------
+
+    def close(self) -> None:
+        """Release the resources of the system resolver, if there is one.
+
+        The system resolver may change a process wide setting; leaving it
+        changed would affect every other socket of the process.
+        """
+        if self.system is not None:
+            self.system.close()

@@ -93,7 +93,36 @@ def test_a_complete_archive_is_accepted(tmp_path: Path) -> None:
         handle.writestr("dontneed-dns-linux-x86_64/LICENSE", "x")
         handle.writestr("dontneed-dns-linux-x86_64/VERSION", "0.1.0")
         handle.writestr("dontneed-dns-linux-x86_64/src/dontneed_dns/__init__.py", "x")
+        handle.writestr("dontneed-dns-linux-x86_64/install.sh", "x")
+        handle.writestr("dontneed-dns-linux-x86_64/uninstall.sh", "x")
     build_release.verify_archive(archive, "linux")
+
+
+def test_a_windows_archive_without_the_executable_is_rejected(tmp_path: Path) -> None:
+    """The end user could not install an archive without the executable."""
+    archive = tmp_path / "dontneed-dns-windows-x86_64.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("dontneed-dns-windows-x86_64/README.md", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/LICENSE", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/VERSION", "0.1.0")
+        handle.writestr("dontneed-dns-windows-x86_64/src/dontneed_dns/__init__.py", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/install.ps1", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/uninstall.ps1", "x")
+    with pytest.raises(SystemExit, match="missing"):
+        build_release.verify_archive(archive, "windows")
+
+
+def test_a_complete_windows_archive_is_accepted(tmp_path: Path) -> None:
+    archive = tmp_path / "dontneed-dns-windows-x86_64.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("dontneed-dns-windows-x86_64/README.md", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/LICENSE", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/VERSION", "0.1.0")
+        handle.writestr("dontneed-dns-windows-x86_64/src/dontneed_dns/__init__.py", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/install.ps1", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/uninstall.ps1", "x")
+        handle.writestr("dontneed-dns-windows-x86_64/dontneed-dns.exe", "x")
+    build_release.verify_archive(archive, "windows")
 
 
 def test_the_checksums_are_written(tmp_path: Path) -> None:
@@ -114,6 +143,101 @@ def test_the_version_is_read_from_the_project() -> None:
     assert build_release.read_version() == __version__
 
 
+# -- the verification of a built release -------------------------------------
+
+
+def _write_zip(path: Path, entries: dict[str, str]) -> None:
+    """Write a zip file with the given entries."""
+    with zipfile.ZipFile(path, "w") as handle:
+        for name, content in entries.items():
+            handle.writestr(name, content)
+
+
+def test_the_verifier_accepts_a_complete_windows_archive(tmp_path: Path) -> None:
+    import verify_release
+
+    archive = tmp_path / "dontneed-dns-windows-x86_64.zip"
+    _write_zip(
+        archive,
+        {
+            "dontneed-dns-windows-x86_64/README.md": "x",
+            "dontneed-dns-windows-x86_64/LICENSE": "x",
+            "dontneed-dns-windows-x86_64/VERSION": "0.1.0",
+            "dontneed-dns-windows-x86_64/src/dontneed_dns/__init__.py": "x",
+            "dontneed-dns-windows-x86_64/install.ps1": "x",
+            "dontneed-dns-windows-x86_64/uninstall.ps1": "x",
+            "dontneed-dns-windows-x86_64/dontneed-dns.exe": "x",
+        },
+    )
+    assert verify_release.verify_archive(archive) == []
+
+
+def test_the_verifier_rejects_a_windows_archive_without_the_executable(tmp_path: Path) -> None:
+    """The end user could not install an archive without the executable."""
+    import verify_release
+
+    archive = tmp_path / "dontneed-dns-windows-x86_64.zip"
+    _write_zip(
+        archive,
+        {
+            "dontneed-dns-windows-x86_64/README.md": "x",
+            "dontneed-dns-windows-x86_64/LICENSE": "x",
+            "dontneed-dns-windows-x86_64/VERSION": "0.1.0",
+            "dontneed-dns-windows-x86_64/src/dontneed_dns/__init__.py": "x",
+            "dontneed-dns-windows-x86_64/install.ps1": "x",
+            "dontneed-dns-windows-x86_64/uninstall.ps1": "x",
+        },
+    )
+    problems = verify_release.verify_archive(archive)
+    assert any("dontneed-dns.exe" in problem for problem in problems)
+
+
+def test_a_published_file_without_a_checksum_is_reported(tmp_path: Path) -> None:
+    """Every published file has to be listed in the checksum file.
+
+    A checksum file that was written with a fallback would leave the
+    executable unprotected, and the user could not check it.
+    """
+    import verify_release
+
+    archive = tmp_path / "dontneed-dns-linux-x86_64.zip"
+    archive.write_bytes(b"one")
+    executable = tmp_path / "dontneed-dns.exe"
+    executable.write_bytes(b"two")
+    checksum_file = tmp_path / "SHA256SUMS"
+    checksum_file.write_text(f"{build_release.sha256_of(archive)}  {archive.name}\n", encoding="utf-8")
+
+    problems = verify_release.verify_checksums(tmp_path)
+    assert any("dontneed-dns.exe" in problem for problem in problems)
+
+
+def test_a_listed_file_that_does_not_exist_is_reported(tmp_path: Path) -> None:
+    import verify_release
+
+    checksum_file = tmp_path / "SHA256SUMS"
+    checksum_file.write_text("0" * 64 + "  missing.zip\n", encoding="utf-8")
+
+    problems = verify_release.verify_checksums(tmp_path)
+    assert any("missing.zip" in problem for problem in problems)
+
+
+def test_the_checksums_of_a_complete_release_are_accepted(tmp_path: Path) -> None:
+    import verify_release
+
+    archive = tmp_path / "dontneed-dns-linux-x86_64.zip"
+    archive.write_bytes(b"one")
+    executable = tmp_path / "dontneed-dns.exe"
+    executable.write_bytes(b"two")
+    checksum_file = tmp_path / "SHA256SUMS"
+    checksum_file.write_text(
+        f"{build_release.sha256_of(archive)}  {archive.name}\n"
+        f"{build_release.sha256_of(executable)}  {executable.name}\n",
+        encoding="utf-8",
+    )
+
+    assert verify_release.verify_checksums(tmp_path) == []
+
+
 def test_the_installer_scripts_are_syntactically_valid() -> None:
     """The shell scripts must at least be parseable by the shell."""
     import shutil
@@ -125,5 +249,7 @@ def test_the_installer_scripts_are_syntactically_valid() -> None:
 
     for name in ("install.sh", "uninstall.sh"):
         path = build_release.PACKAGING_DIR / "linux" / name
-        completed = subprocess.run([bash, "-n", str(path)], capture_output=True, text=True, check=False)
+        completed = subprocess.run(
+            [bash, "-n", str(path)], capture_output=True, text=True, errors="replace", check=False
+        )
         assert completed.returncode == 0, completed.stderr

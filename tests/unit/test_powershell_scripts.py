@@ -35,6 +35,7 @@ def _run_script(script: Path, arguments: list[str], env: dict[str, str]) -> subp
     return subprocess.run(
         [PWSH or "pwsh", "-NoProfile", "-File", str(script), *arguments],
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
         env=env,
@@ -99,6 +100,7 @@ def test_the_installation_scripts_parse() -> None:
             str(PROJECT_ROOT / "scripts" / "check_powershell.ps1"),
         ],
         capture_output=True,
+        errors="replace",
         text=True,
         check=False,
     )

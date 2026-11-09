@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -228,6 +229,34 @@ def test_doctor_produces_a_report(adapter: FakeAdapter, config_path: Path) -> No
     result = runner.invoke(cli.app, ["doctor", "--config", str(config_path)])
     assert result.exit_code == 0
     assert '"platform"' in result.stdout
+
+
+def test_the_doctor_report_hides_the_home_directory(
+    adapter: FakeAdapter, config_path: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report must not contain the home directory of the user.
+
+    The redaction has to happen on the values of the report and not on the
+    serialised document: the JSON encoding escapes the backslashes of a
+    Windows path, so the home directory would no longer be recognised and
+    would survive into the report.
+    """
+    home = r"C:\Users\Excalibur"
+    monkeypatch.setattr("dontneed_dns.core.redact.Path.home", staticmethod(lambda: Path(home)))
+    monkeypatch.setenv("USERNAME", "Excalibur")
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.setattr(adapter, "diagnostics", lambda: {"paths": {"install": home + r"\dontneed-dns"}})
+
+    report_file = tmp_path / "report.json"
+    result = runner.invoke(cli.app, ["doctor", "--config", str(config_path), "-o", str(report_file)])
+
+    assert result.exit_code == 0
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+    install = report["platform"]["paths"]["install"]
+    assert "Excalibur" not in install
+    # The whole home directory is replaced, not only the user name.
+    assert install.startswith("~")
+    assert "Users" not in install
 
 
 def test_check_runs_the_health_checks(adapter: FakeAdapter, config_path: Path) -> None:

@@ -230,12 +230,12 @@ class ProxyServer:
             return "socks5"
         return "http"
 
-    def _handle_socks5(self, client: socket.socket) -> tuple[str | None, int | None]:
+    def _handle_socks5(self, client: socket.socket) -> tuple[str, int]:
         socks5.negotiate(client)
         request = socks5.read_request(client)
         return request.host, request.port
 
-    def _handle_http_connect(self, client: socket.socket) -> tuple[str | None, int | None]:
+    def _handle_http_connect(self, client: socket.socket) -> tuple[str, int]:
         target = http_connect.read_connect_request(client)
         return target.host, target.port
 
@@ -292,6 +292,8 @@ class ProxyServer:
                 infos = []
             for info in infos:
                 address = info[4][0]
+                if not isinstance(address, str):
+                    continue
                 if address not in addresses:
                     addresses.append(address)
         if not addresses:

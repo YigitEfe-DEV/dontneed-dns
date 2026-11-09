@@ -80,6 +80,13 @@ function Invoke-Native {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$Arguments = @()
     )
+    # A program that cannot be started at all leaves the exit code of an
+    # earlier command in place, so it is looked for before it is run.
+    if (-not (Test-Path -LiteralPath $FilePath) -and
+        -not (Get-Command $FilePath -ErrorAction SilentlyContinue)) {
+        Write-Note "    error: the command $FilePath was not found"
+        return @{ Output = "the command $FilePath was not found"; ExitCode = 127 }
+    }
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $global:LASTEXITCODE = 0
@@ -89,13 +96,11 @@ function Invoke-Native {
     } finally {
         $ErrorActionPreference = $previous
     }
-    # A program that cannot be started at all leaves the exit code of an
-    # earlier command in place and reports an error record.
+    # The output is reported as it is.  A program that writes to the error
+    # stream has not failed: the exit code decides that.  pip, for example,
+    # writes a notice about the PATH to the error stream and still succeeds.
     foreach ($line in $output) {
         Write-Note "    $line"
-        if ($line -is [System.Management.Automation.ErrorRecord] -and $code -eq 0) {
-            $code = 1
-        }
     }
     return @{ Output = ($output | Out-String).Trim(); ExitCode = $code }
 }
@@ -105,7 +110,11 @@ $ExecutableName = 'dontneed-dns.exe'
 $Source = Join-Path $Here $ExecutableName
 $Wheelhouse = Join-Path $Here 'wheels'
 
-$InstallDir = Join-Path $env:LOCALAPPDATA 'dontneed-dns'
+$LocalAppData = $env:LOCALAPPDATA
+if (-not $LocalAppData) {
+    $LocalAppData = Join-Path $env:USERPROFILE 'AppData\Local'
+}
+$InstallDir = Join-Path $LocalAppData 'dontneed-dns'
 $Target = Join-Path $InstallDir $ExecutableName
 if (-not $LogFile) {
     $LogFile = Join-Path $InstallDir 'install-output.txt'
@@ -119,16 +128,22 @@ if (Test-Path $Source) {
     Copy-Item -Path $Source -Destination $Target -Force
 } elseif (Test-Path $Wheelhouse) {
     Write-Step "the executable is missing; installing from the bundled wheelhouse"
-    $Python = (Get-Command python -ErrorAction SilentlyContinue).Source
-    if (-not $Python) {
-        $Python = (Get-Command python3 -ErrorAction SilentlyContinue).Source
+    # The Microsoft Store ships an alias named python.exe that opens the
+    # Store instead of an interpreter.  It is not usable.
+    $Python = $null
+    foreach ($name in @('python3', 'python')) {
+        $candidate = (Get-Command $name -ErrorAction SilentlyContinue).Source
+        if ($candidate -and $candidate -notlike '*WindowsApps*') {
+            $Python = $candidate
+            break
+        }
     }
     if (-not $Python) {
         Write-Fail "python was not found on the PATH and the executable is missing."
     }
     $VenvDir = Join-Path $InstallDir 'venv'
-    & $Python -m venv $VenvDir
-    if ($LASTEXITCODE -ne 0) {
+    $result = Invoke-Native -FilePath $Python -Arguments @('-m', 'venv', $VenvDir)
+    if ($result.ExitCode -ne 0) {
         Write-Fail "the virtual environment could not be created."
     }
     $Target = Join-Path $VenvDir 'Scripts\dontneed-dns.exe'
@@ -170,6 +185,18 @@ if (Get-Command schtasks -ErrorAction SilentlyContinue) {
         $query = Invoke-Native -FilePath 'schtasks' -Arguments @('/Query', '/TN', $task)
         if ($query.ExitCode -ne 0) {
             Write-Fail "the task $task does not exist although the installation reported no error."
+        }
+        # The definition of the task is read back as well.  A task that runs
+        # another program would start the wrong thing at every logon.
+        $definition = Invoke-Native -FilePath 'schtasks' -Arguments @('/Query', '/TN', $task, '/XML')
+        if ($definition.ExitCode -ne 0) {
+            Write-Fail "the task $task could not be read back."
+        }
+        if ($definition.Output -notmatch [regex]::Escape($Target)) {
+            Write-Fail "the task $task does not run $Target."
+        }
+        if ($definition.Output -notmatch 'run (dns|proxy) --config') {
+            Write-Fail "the task $task does not run a component of this project."
         }
     }
 } else {

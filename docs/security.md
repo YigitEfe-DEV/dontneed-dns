@@ -56,8 +56,26 @@ The log is deliberately thin:
 
 `dontneed-dns doctor` produces a report in which the same redaction has
 been applied, so it can be pasted into an issue without thinking about it
-first.
+first.  The redaction is applied to the values of the report and not to its
+serialised form: the JSON encoding escapes the backslashes of a Windows
+path, so a home directory of `C:\Users\somebody` would no longer be
+recognised as such and would survive into the report.
 
+## The local listeners
+
+The resolver on `127.0.0.1:5354` and the proxy on `127.0.0.1:10808` are
+listeners of the current user.  They are not authenticated: every program
+of the current user can send a query to the resolver and can use the
+proxy.  That is the same situation as with every other local proxy and it
+is what makes the tool usable without administrator rights.
+
+The ports are checked before the components start, and a program that
+already holds them is reported as a conflict instead of being silently
+replaced.  On Windows versions before 1607 two sockets could share an
+address, so on those systems another program of the same user could take
+the port over after the start; Windows 10 version 1607 and every Windows 11
+do not allow it.  The resolver binds the loopback interface only, never a
+routable address.
 ## Third party code and licences
 
 | Component | Licence | Usage |

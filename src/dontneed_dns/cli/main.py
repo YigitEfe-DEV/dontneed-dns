@@ -423,14 +423,20 @@ def doctor_command(
     report: dict[str, object] = {
         "version": __version__,
         "platform": adapter.diagnostics(),
-        "configuration": redactor.value(config.to_dict()),
+        "configuration": config.to_dict(),
         "configuration_path": str(config.path),
         "capabilities": [list(row) for row in adapter.capabilities().as_rows()],
         "health": [
-            {"check": check.name, "ok": check.ok, "detail": redactor.text(check.detail)}
+            {"check": check.name, "ok": check.ok, "detail": check.detail}
             for check in run_health_checks(config)
         ],
     }
+
+    # The redaction has to happen on the values and not on the serialised
+    # document.  The JSON encoding escapes the backslashes of a Windows
+    # path, so a home directory of ``C:\Users\somebody`` would no longer be
+    # recognised as such and would survive into the report.
+    report = redactor.value(report)
 
     text = _render_report(report)
     if output is not None:

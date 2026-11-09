@@ -138,8 +138,8 @@ class TlsFragmenter:
         self._buffer.clear()
         self._state = "done"
         self._did_fragment = True
-        pieces = self.split_record(record)
-        fragments = [Fragment(piece) for piece in pieces]
+        chunks = self.split_record(record)
+        fragments = [Fragment(chunk) for chunk in chunks]
         if len(fragments) > 1:
             fragments[1] = Fragment(fragments[1].data, self.settings.preamble_delay)
             for index in range(2, len(fragments)):
