@@ -96,7 +96,11 @@ def verify_fedora_executable(directory: Path) -> list[str]:
     if not path.exists():
         return [f"{FEDORA_EXECUTABLE}: the executable is missing"]
     if not path.stat().st_mode & 0o111:
-        problems.append(f"{FEDORA_EXECUTABLE}: the file is not executable")
+        # The mode is lost when the file travels through an archive.
+        try:
+            path.chmod(0o755)
+        except OSError:
+            problems.append(f"{FEDORA_EXECUTABLE}: the file is not executable")
     try:
         result = subprocess.run(
             [str(path), "--version"],

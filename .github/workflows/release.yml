@@ -243,6 +243,9 @@ jobs:
       - name: Compute the checksums
         run: |
           cd dist
+          # The mode of the files is lost when they travel through an
+          # archive, so the executable is made executable again.
+          chmod +x dontneed-dns-fedora-x86_64
           # Every published file has to be listed.  A fallback that leaves
           # the executable out would publish it without a checksum.
           sha256sum -- *.zip *.exe dontneed-dns-fedora-x86_64 > SHA256SUMS
