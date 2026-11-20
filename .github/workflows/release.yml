@@ -226,13 +226,15 @@ jobs:
     name: Publish the release
     needs: [build-linux, build-windows, check-windows-install, build-fedora, check-fedora-install]
     runs-on: ubuntu-latest
+    # The release is published from the same distribution the executable is
+    # built for, so that the verification can start it.
+    container:
+      image: fedora:45
     steps:
-      - uses: actions/checkout@v4
+      - name: Install the runtime
+        run: dnf -y install git python3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: actions/checkout@v4
 
       - name: Download the archives
         uses: actions/download-artifact@v4

@@ -28,7 +28,9 @@ from dontneed_dns.core.system import close_listener, port_in_use, udp_port_in_us
 __all__ = ["DnsServer"]
 
 #: How often a free port is tried when the operating system chooses it.
-EPHEMERAL_PORT_ATTEMPTS = 8
+#: Windows reserves ranges of ports for the hypervisor, and a port of such a
+#: range cannot be bound; another one is asked for.
+EPHEMERAL_PORT_ATTEMPTS = 24
 
 _LOGGER = get_logger("dns.server")
 
