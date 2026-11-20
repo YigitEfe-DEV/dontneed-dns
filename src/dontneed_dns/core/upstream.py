@@ -102,11 +102,20 @@ class UdpSystemResolver(SystemResolver):
         *,
         timeout: float = 3.0,
         resolv_conf: str | os.PathLike[str] = RESOLV_CONF,
+        mark: int | None = None,
+        source_port: int = 0,
     ) -> None:
         self.nameservers = (
             list(nameservers) if nameservers is not None else read_resolv_conf_nameservers(resolv_conf)
         )
         self.timeout = timeout
+        #: The mark that the queries carry.  The transparent router uses it
+        #: to recognise its own traffic and to avoid a routing loop.
+        self.mark = mark
+        #: The port the queries are sent from.  The transparent router
+        #: excludes this port from the redirection of the DNS queries,
+        #: which keeps the resolver from redirecting its own fallback.
+        self.source_port = source_port
 
     def query(self, wire: bytes) -> bytes | None:
         if not self.nameservers:
@@ -136,6 +145,17 @@ class UdpSystemResolver(SystemResolver):
     def _query_udp(self, server: str, wire: bytes) -> bytes | None:
         family = socket.AF_INET6 if ":" in server else socket.AF_INET
         with socket.socket(family, socket.SOCK_DGRAM) as sock:
+            if self.mark is not None:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, self.mark)
+                except OSError:
+                    pass
+            if self.source_port:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(("", self.source_port))
+                except OSError:
+                    pass
             sock.settimeout(self.timeout)
             sock.sendto(wire, (server, 53))
             data, _ = sock.recvfrom(MAX_UDP_PAYLOAD)
@@ -144,6 +164,11 @@ class UdpSystemResolver(SystemResolver):
     def _query_tcp(self, server: str, wire: bytes) -> bytes | None:
         family = socket.AF_INET6 if ":" in server else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as sock:
+            if self.mark is not None:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, self.mark)
+                except OSError:
+                    pass
             sock.settimeout(self.timeout)
             sock.connect((server, 53))
             sock.sendall(struct.pack("!H", len(wire)) + wire)
@@ -219,9 +244,14 @@ class GetAddrInfoResolver(SystemResolver):
             self._changed_timeout = False
 
 
-def create_system_resolver(timeout: float = 3.0) -> SystemResolver:
+def create_system_resolver(
+    timeout: float = 3.0,
+    *,
+    mark: int | None = None,
+    source_port: int = 0,
+) -> SystemResolver:
     """Return the best available system resolver for the running platform."""
     servers = read_resolv_conf_nameservers()
     if servers:
-        return UdpSystemResolver(servers, timeout=timeout)
+        return UdpSystemResolver(servers, timeout=timeout, mark=mark, source_port=source_port)
     return GetAddrInfoResolver(timeout=timeout)

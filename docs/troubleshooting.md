@@ -183,6 +183,75 @@ dontneed-dns tui
 * **Nothing is displayed** - the terminal is too small.  The interface needs
   at least 80 columns and 24 rows.
 
+## The Fedora installer stops before it installs
+
+The installer prints one line per step.  The line that says `FAIL` names
+the reason.
+
+| Message | What it means | What to do |
+| --- | --- | --- |
+| `systemd is not available on this system` | The host has no systemd, or the installer runs in a container without it. | Install on a real system with systemd. |
+| `no user session was found` | `XDG_RUNTIME_DIR` is missing, so `systemctl --user` cannot work. | Run the installer from a terminal inside your login session, not from a cron job or a detached service. |
+| `this executable is built for x86_64, this machine is ...` | Wrong architecture. | Use the x86_64 build on an x86_64 machine. |
+| `... MiB free at ..., ... MiB are needed` | Not enough disk space. | Free some space and run the installer again. |
+| `the port ... is already in use` | Another instance of the resolver is running. | `dontneed-dns status`, then stop the other instance. |
+
+## The services do not start after a login
+
+The automatic start follows the option `service.autostart` of the
+configuration file.  Configurations that were written by version 0.1.2 or
+older contain `autostart = false`, because the option was not read back
+then.
+
+```bash
+dontneed-dns config show | grep autostart
+dontneed-dns dns enable
+dontneed-dns proxy enable
+```
+
+`dontneed-dns status` shows `Starts automatically: yes` when the unit is
+enabled.
+
+## The Fedora installer keeps the old configuration
+
+That is intended.  The installer never overwrites an existing
+configuration file, so the split domains and the fragmentation settings
+survive an update.  Use `dontneed-dns config show` to see what is in
+effect.
+
+## The transparent router does not start
+
+The router needs the `CAP_NET_ADMIN` capability.  The unit of the router
+is a system unit; if it is missing, the installation was not able to ask
+for the administrator rights.
+
+```bash
+systemctl status dontneed-dns-transparent.service
+journalctl -u dontneed-dns-transparent.service -n 50
+```
+
+## The traffic of an application is not redirected
+
+The router only redirects the addresses that it knows.  The addresses of
+the target domains are learned from the resolver; the traffic of a game
+server is reached over an address that the application got from an
+interface, and that address is not known.
+
+```bash
+sudo nft list table ip dontneed_dns
+```
+
+The set `targets` shows the addresses that are redirected.  Additional
+addresses can be added with the option `transparent.target_ips` of the
+configuration file.
+
+## The DNS queries of the applications are not answered
+
+The redirection of the DNS queries points at the local resolver.  When
+the resolver is not running, the router removes the redirection, so that
+no query is lost.  The router does this on its own; the message "the
+resolver does not answer" in the journal tells the story.
+
 ## Collecting a report for a bug report
 
 ```bash

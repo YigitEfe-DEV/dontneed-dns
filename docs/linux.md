@@ -12,7 +12,7 @@ all and only touches files inside your home directory.
 | Arch Linux | Supported | Same systemd units as CachyOS |
 | Ubuntu | Supported | Verified on the GitHub Actions runner |
 | Debian | Supported | Verified on the GitHub Actions runner |
-| Fedora | Supported | Verified on the GitHub Actions runner |
+| Fedora 45 x86_64 | Verified | The single executable installer is built and tested on Fedora 45 |
 | openSUSE | Expected | Uses systemd, the units are portable |
 | Other distributions | Unknown | The distribution is detected and reported by `dontneed-dns status` |
 
@@ -22,11 +22,135 @@ on `/etc/os-release`.
 
 ## Prerequisites
 
-* Python 3.11 or newer
 * systemd (the `systemctl` command)
 * `journalctl` for the log output
 
 No compiler and no development headers are needed.
+
+The single executable installer of the Fedora edition needs **no Python at
+all**: it carries the interpreter and every dependency.  The source archive
+and the source tree need Python 3.11 or newer.
+
+## Installation on Fedora with the single executable
+
+```bash
+chmod +x dontneed-dns-fedora-x86_64
+./dontneed-dns-fedora-x86_64
+```
+
+The file is the whole installation.  It is built on Fedora 45 and carries
+the application, the Python runtime and every dependency, so no Python, no
+pip, no virtual environment and no archive extraction are needed.
+
+The installer performs these steps and prints one line for each of them:
+
+| Step | What it does |
+| --- | --- |
+| Platform | reads `/etc/os-release` and reports the distribution |
+| Architecture | checks that the host is x86_64 |
+| systemd | checks that systemd is available and that a user session exists |
+| Disk space | checks that the payload fits |
+| Existing installation | reports what is already installed |
+| Application | copies the executable to `~/.local/share/dontneed-dns/bin/dontneed-dns` (mode 0755) |
+| Configuration | keeps the existing file, or writes the defaults when it is missing (mode 0600) |
+| Services | registers `dontneed-dns-dns.service` and `dontneed-dns-proxy.service` |
+| Automatic start | enables the units so that they start after every login |
+| Startup | starts both components |
+| Health | runs the health checks |
+
+Nothing is written outside the home directory and nothing runs as root.
+The unit files run the installed executable, not an interpreter:
+
+```
+ExecStart=/home/user/.local/share/dontneed-dns/bin/dontneed-dns run dns --config /home/user/.config/dontneed-dns/config.toml
+```
+
+The same file is the application afterwards:
+
+```bash
+~/.local/share/dontneed-dns/bin/dontneed-dns status
+~/.local/share/dontneed-dns/bin/dontneed-dns tui
+```
+
+### The commands of the installer
+
+| Command | Effect |
+| --- | --- |
+| `dontneed-dns-fedora-x86_64` | install, start and check |
+| `dontneed-dns-fedora-x86_64 --status` | the state of the installation |
+| `dontneed-dns-fedora-x86_64 --uninstall` | stop and remove the services and the application |
+| `dontneed-dns-fedora-x86_64 --uninstall --purge` | also remove the configuration |
+| `dontneed-dns-fedora-x86_64 --autostart` | force the automatic start on |
+| `dontneed-dns-fedora-x86_64 --no-autostart` | force the automatic start off |
+| `dontneed-dns-fedora-x86_64 --version` | the version |
+| `dontneed-dns-fedora-x86_64 --help` | the help of the installer |
+
+Every other argument is handed to the application.
+
+### The automatic start
+
+The option `service.autostart` of the configuration file decides whether
+the units are enabled.  It is `true` by default, so a fresh installation
+starts the services after every login.
+
+> Configurations that were written by version 0.1.2 or older contain
+> `autostart = false`, because the option was not read before.  Set it to
+> `true` to keep the automatic start, or run the installer with
+> `--autostart`.
+
+### The removal
+
+```bash
+dontneed-dns-fedora-x86_64 --uninstall
+```
+
+The uninstall stops the services, disables them, removes the two unit
+files and the installed executable.  The configuration is kept; add
+`--purge` to remove it.  Files that do not belong to this project, such as
+a virtual environment of an older installation, are never touched.
+
+## Transparent routing
+
+The transparent router removes the need to configure the applications.
+It is installed with the single executable and it is switched on by the
+installer.
+
+| Traffic | What happens |
+| --- | --- |
+| DNS queries of the user | redirected to the local resolver, which answers the target domains over DNS-over-HTTPS |
+| TCP to a target address | redirected to the transparent proxy, which splits the TLS ClientHello when the server name matches |
+| UDP to a target address | routed into a TUN device and forwarded with the original address of the client |
+
+### How it is built
+
+* the nftables tables `ip dontneed_dns` and `ip6 dontneed_dns6` hold the
+  rules; they are the only rules the project creates and the only ones it
+  removes,
+* the routing table 100 holds the routes of the targets, and a rule that
+  sends the traffic of the user into it; every other traffic falls through
+  to the main table,
+* the traffic of the router itself carries a mark, which keeps it away
+  from the redirection and from the TUN device; that is what prevents the
+  routing loop,
+* the fallback queries of the resolver are sent from the port
+  `transparent.resolver_source_port`, and the redirection of the DNS
+  queries skips that port, so that the resolver never redirects its own
+  fallback.
+
+### The privileges
+
+The router changes the rules of the machine and therefore needs the
+`CAP_NET_ADMIN` capability.  It runs as a system service
+(`dontneed-dns-transparent.service`) that executes as the user who
+installed it and has that single capability.  The DNS resolver and the
+proxy keep running as the user in the user scope of systemd.
+
+### The removal
+
+`dontneed-dns-fedora-x86_64 --uninstall` stops the router, removes the
+two tables, the routes and the rules, and removes the unit file.  The
+configuration of the firewall of the machine is never changed, so
+nothing has to be restored there.
 
 ## Installation from the release archive
 
@@ -77,9 +201,11 @@ sudo dontneed-dns install --scope system --yes
 ```
 
 This writes the units to `/etc/systemd/system`, puts the configuration into
-`/etc/dontneed-dns/config.toml` and runs the components as `nobody`.  The
-system scope exists for the case where the components have to run for every
-user on the machine.  It is never selected automatically.
+`/etc/dontneed-dns/config.toml` and runs the components **as root**: the
+unit has no `User=` directive yet.  The system scope exists for the case
+where the components have to run for every user on the machine.  It is
+never selected automatically, and the Fedora edition always uses the user
+scope.
 
 ## Everyday commands
 
@@ -168,6 +294,20 @@ From the release archive:
 ```
 
 Nothing outside of the files listed above is touched.
+
+## Known limitations of the Fedora edition
+
+* The executable is built on Fedora 45 and carries its own interpreter and
+  its own copy of the C library.  It runs on Fedora 45 and newer.  It is
+  not built for other distributions and it is not digitally signed.
+* The installation writes into the home directory only.  A system wide
+  installation (`--scope system`) is not offered by the installer.
+* The system scope of the command line interface runs the components as
+  root.  The Fedora edition does not use it.
+* The installer never changes the firewall, the routing table or
+  `/etc/resolv.conf`.  Transparent routing is not part of this release:
+  the applications still have to be pointed at the proxy or at the local
+  resolver.
 
 ## Troubleshooting
 

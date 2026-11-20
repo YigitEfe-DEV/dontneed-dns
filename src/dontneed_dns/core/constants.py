@@ -75,6 +75,20 @@ DEFAULT_FRAGMENT_PREAMBLE_SIZE = 15
 DEFAULT_FRAGMENT_PREAMBLE_DELAY_MS = 50
 DEFAULT_FRAGMENT_CHUNK_DELAY_MS = 10
 
+# --- Transparent routing ------------------------------------------------
+
+#: The port of the transparent TCP proxy.
+DEFAULT_TRANSPARENT_TCP_PORT = 15001
+#: The port of the transparent UDP relay.
+DEFAULT_TRANSPARENT_UDP_PORT = 15002
+#: The name of the nftables tables that belong to this project.
+DEFAULT_NFT_TABLE = "dontneed_dns"
+#: The mark that the traffic of the router carries.
+DEFAULT_BYPASS_MARK = 1
+#: The port the fallback queries of the resolver are sent from.  The
+#: redirection of the DNS queries skips this port.
+DEFAULT_RESOLVER_SOURCE_PORT = 15353
+
 # --- Filesystem ----------------------------------------------------------
 
 APP_DIR_NAME = "dontneed-dns"

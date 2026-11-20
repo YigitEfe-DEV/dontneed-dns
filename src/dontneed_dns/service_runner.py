@@ -22,6 +22,7 @@ from dontneed_dns.core.resolver import SplitResolver
 from dontneed_dns.core.upstream import create_system_resolver
 from dontneed_dns.dns.server import DnsServer
 from dontneed_dns.proxy.server import ProxyServer
+from dontneed_dns.transparent.service import run_transparent
 
 __all__ = ["build_resolver", "main", "run_dns", "run_proxy"]
 
@@ -29,17 +30,57 @@ _LOGGER = get_logger("service")
 
 
 def build_resolver(config: Config) -> SplitResolver:
-    """Create the split resolver described by ``config``."""
+    """Create the split resolver described by ``config``.
+
+    When the transparent router is active, the answers of the target
+    domains are written to the state file of the router, so that it knows
+    which addresses to route.  The queries of the fallback resolver carry
+    the bypass mark, so that they are not redirected again.
+    """
     providers = select_providers(config.dns.doh_providers)
     doh = DohClient(providers, timeout=config.dns.timeout, retries=config.dns.retries)
-    system = create_system_resolver(timeout=config.dns.timeout) if config.dns.system_fallback else None
+    transparent = config.transparent.enabled
+    mark = config.transparent.bypass_mark if transparent else None
+    source_port = config.transparent.resolver_source_port if transparent else 0
+    system = (
+        create_system_resolver(timeout=config.dns.timeout, mark=mark, source_port=source_port)
+        if config.dns.system_fallback
+        else None
+    )
     return SplitResolver(
         doh,
         system,
         split_domains=config.dns.split_domains,
         route_split=config.dns.route_split,
         system_fallback=config.dns.system_fallback,
+        on_resolved=_target_recorder(config),
     )
+
+
+def _target_recorder(config: Config):
+    """Return the callback that records the addresses of the target domains."""
+    if not config.transparent.enabled or not config.transparent.learn:
+        return None
+
+    from dontneed_dns.transparent.targets import write_targets
+
+    targets = {domain.lower().rstrip(".") for domain in config.dns.split_domains}
+    seen: dict[str, set[str]] = {}
+
+    def record(name: str, addresses: list[str]) -> None:
+        candidate = name.lower().rstrip(".")
+        if candidate not in targets:
+            return
+        known = seen.setdefault(candidate, set())
+        if not set(addresses) - known:
+            return
+        known.update(addresses)
+        collected: set[str] = set()
+        for values in seen.values():
+            collected.update(values)
+        write_targets(sorted(collected))
+
+    return record
 
 
 def _write_pid_file(component: str) -> Path:
@@ -120,7 +161,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="dontneed-dns-service",
         description="Run a dontneed-dns component in the foreground.",
     )
-    parser.add_argument("component", choices=["dns", "proxy"], help="the component to run")
+    parser.add_argument(
+        "component",
+        choices=["dns", "proxy", "transparent"],
+        help="the component to run",
+    )
     parser.add_argument("--config", default=None, help="path of the configuration file")
     args = parser.parse_args(argv)
 
@@ -147,7 +192,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pass
 
     pid_path = _write_pid_file(args.component)
-    runner = run_dns if args.component == "dns" else run_proxy
+    runners = {"dns": run_dns, "proxy": run_proxy, "transparent": run_transparent}
+    runner = runners[args.component]
     try:
         return runner(config, stop_event)
     finally:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 __all__ = ["PROJECT_NAME", "USER_AGENT", "__version__"]
 
-__version__ = "0.1.2"
+__version__ = "0.3.0"
 
 PROJECT_NAME = "dontneed-dns"
 

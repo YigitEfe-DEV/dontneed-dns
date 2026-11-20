@@ -141,6 +141,70 @@ when the limit is reached; the proxy refuses new connections above
 `proxy.max_connections`.  Both servers shut down cleanly: the sockets are
 closed, the pending work is cancelled and the listener ports are released.
 
+## The Fedora edition
+
+The Fedora edition adds one module and one entry point on top of the
+architecture above:
+
+| File | Responsibility |
+| --- | --- |
+| `dontneed_dns/installer.py` | The installation, the removal and the status report of the self contained edition |
+| `packaging/linux/fedora_entry.py` | The entry point of the executable: it dispatches to the installer or to the command line interface |
+| `scripts/build_fedora_executable.py` | Builds the executable with PyInstaller and writes the checksum |
+
+The installer never talks to systemd directly.  It uses the existing
+`LinuxPlatformAdapter`, so the units, the state machine and the removal
+behave exactly like they do for a source installation.  The only new
+behaviour in the adapter is the `ExecStart` line: a self contained
+installation runs the installed executable
+(`dontneed-dns run dns --config ...`) instead of an interpreter with the
+module path, because the executable has no module tree.
+
+The executable is built with PyInstaller in one file mode.  It carries the
+interpreter, the extension modules and the data files of `textual`,
+`typer` and `rich`, which is why the release job builds it inside a
+Fedora container: a binary that is linked against another distribution's C
+library does not run everywhere.
+
+The installer only writes into the home directory: the executable below
+`~/.local/share/dontneed-dns/bin`, the unit files below
+`~/.config/systemd/user`, the configuration below `~/.config/dontneed-dns`
+and the state below `~/.local/state/dontneed-dns`.  It never asks for
+root privileges and it never changes the firewall, the routing table or
+`/etc/resolv.conf`.
+
+## The transparent router
+
+The transparent router is the fourth part of the project.  It consists
+of the modules below `dontneed_dns/transparent`:
+
+| Module | Responsibility |
+| --- | --- |
+| `nft.py` | The nftables tables, the chains and the sets of the project |
+| `tun.py` | The TUN device and the routing table of the project |
+| `tcp.py` | The transparent TCP proxy; it reads the original destination and splits the TLS ClientHello |
+| `udp_tun.py` | The UDP relay; it reads the packets of the TUN device and forwards them |
+| `sni.py` | The parser of the TLS ClientHello |
+| `targets.py` | The addresses of the target domains and the file they are learned into |
+| `service.py` | The runner of the router: the rules, the routes and the proxies |
+
+Three mechanisms decide where a packet goes:
+
+1. the DNS queries of the user are redirected to the local resolver with
+   nftables.  The fallback queries of the resolver use a port of their
+   own, which the redirection skips, so that the resolver never redirects
+   its own fallback,
+2. the TCP connections to the target addresses are redirected to the
+   transparent proxy.  The kernel keeps the original destination and
+   hands it out with `SO_ORIGINAL_DST`,
+3. the UDP traffic of the target addresses is routed into a TUN device.
+   A redirect would destroy the address the datagram was sent to, and the
+   receiver of a game server needs it.
+
+The traffic of the router itself carries a mark.  The rules skip the
+marked packets and the routing rules send them through the main table.
+That is the protection against the routing loop.
+
 ## Testing strategy
 
 * `tests/unit` - pure logic: DNS messages, the DoH client, the resolver, the

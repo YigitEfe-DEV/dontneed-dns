@@ -12,6 +12,7 @@ HTTPS is available.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from dontneed_dns.core.dnsmessage import build_query, extract_addresses, matches_domain, parse_message
@@ -47,12 +48,17 @@ class SplitResolver:
         split_domains: tuple[str, ...] | list[str] = (),
         route_split: bool = True,
         system_fallback: bool = True,
+        on_resolved: Callable[[str, list[str]], None] | None = None,
     ) -> None:
         self.doh = doh_client
         self.system = system_resolver
         self.split_domains = tuple(split_domains)
         self.route_split = route_split
         self.system_fallback = system_fallback
+        #: Called with the name and the addresses of every answer.  The
+        #: transparent router uses it to learn the addresses of the target
+        #: domains.
+        self.on_resolved = on_resolved
 
     def should_route_to_doh(self, name: str) -> bool:
         """``True`` when ``name`` must be resolved over DNS-over-HTTPS."""
@@ -72,6 +78,8 @@ class SplitResolver:
             return ResolutionResult(None, "none", "message has no question section")
 
         route_doh = self.should_route_to_doh(question.name)
+        if self.on_resolved is not None:
+            self._report(question.name, wire)
 
         if route_doh:
             try:
@@ -102,6 +110,19 @@ class SplitResolver:
             return ResolutionResult(self.doh.query(wire), "doh")
         except Exception as exc:  # noqa: BLE001
             return ResolutionResult(None, "none", str(exc))
+
+    def _report(self, name: str, wire: bytes) -> None:
+        """Tell the listener which addresses an answer contained."""
+        if self.on_resolved is None:
+            return
+        try:
+            addresses = extract_addresses(wire)
+        except Exception:  # noqa: BLE001 - the listener must not break the query
+            return
+        try:
+            self.on_resolved(name, addresses)
+        except Exception:  # noqa: BLE001 - the listener must not break the query
+            pass
 
     def _can_use_system(self, qtype: int) -> bool:
         return self.system is not None and self.system.supports_type(qtype)

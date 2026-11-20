@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -24,6 +25,9 @@ from build_release import FORBIDDEN_PATTERNS, PLATFORM_ENTRIES
 
 REQUIRED_ENTRIES = ("README.md", "LICENSE", "VERSION")
 SOURCE_ENTRY = "src/dontneed_dns/__init__.py"
+
+#: The self contained executable of the Fedora edition.
+FEDORA_EXECUTABLE = "dontneed-dns-fedora-x86_64"
 
 
 def sha256_of(path: Path) -> str:
@@ -81,6 +85,36 @@ def verify_archive(archive: Path) -> list[str]:
     return problems
 
 
+def verify_fedora_executable(directory: Path) -> list[str]:
+    """Check the self contained executable of the Fedora edition.
+
+    The file has to exist, has to be executable and has to answer to
+    ``--version``.  A binary that cannot start is worse than no binary.
+    """
+    problems: list[str] = []
+    path = directory / FEDORA_EXECUTABLE
+    if not path.exists():
+        return [f"{FEDORA_EXECUTABLE}: the executable is missing"]
+    if not path.stat().st_mode & 0o111:
+        problems.append(f"{FEDORA_EXECUTABLE}: the file is not executable")
+    try:
+        result = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except OSError as exc:
+        problems.append(f"{FEDORA_EXECUTABLE}: it could not be started ({exc})")
+        return problems
+    except subprocess.TimeoutExpired:
+        problems.append(f"{FEDORA_EXECUTABLE}: it did not answer to --version")
+        return problems
+    if result.returncode != 0 or "dontneed-dns" not in result.stdout:
+        problems.append(f"{FEDORA_EXECUTABLE}: it did not answer to --version (exit {result.returncode})")
+    return problems
+
+
 def verify_checksums(directory: Path) -> list[str]:
     """Compare the archives with the ``SHA256SUMS`` file.
 
@@ -114,7 +148,7 @@ def verify_checksums(directory: Path) -> list[str]:
             continue
         if path.name == checksum_file.name:
             continue
-        if path.suffix not in (".zip", ".exe"):
+        if path.suffix not in (".zip", ".exe") and path.name != FEDORA_EXECUTABLE:
             continue
         if path.name not in expected:
             problems.append(f"{path.name} is published but not listed in {checksum_file.name}")
@@ -144,6 +178,7 @@ def main() -> int:
         state = "ok" if not found else f"{len(found)} problem(s)"
         print(f"{archive.name}: {state}")
 
+    problems.extend(verify_fedora_executable(args.directory))
     problems.extend(verify_checksums(args.directory))
 
     if problems:

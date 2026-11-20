@@ -5,6 +5,81 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-20
+
+The Fedora edition.  The Linux edition is now shipped as a single
+executable that installs itself, so that no Python, no pip, no virtual
+environment and no archive extraction are needed on the target machine.
+
+### Added
+
+- The self contained executable `dontneed-dns-fedora-x86_64`.  It carries
+  the application, the Python runtime and every dependency, and it is built
+  on Fedora 45 so that it runs on Fedora 45 and newer.
+- The installer.  Running the executable without arguments checks the
+  platform, the architecture, the systemd capabilities, the free disk
+  space and the existing installation, copies itself into
+  `~/.local/share/dontneed-dns/bin/dontneed-dns`, registers the two
+  systemd user services, enables them, starts them and runs the health
+  checks.  Every step prints one line.  Nothing is written outside the home
+  directory and nothing runs as root.
+- The commands of the installer: `--install`, `--uninstall` (with
+  `--purge`), `--status`, `--version`, `--help`, `--config`,
+  `--autostart` and `--no-autostart`.  Every other argument is handed to
+  the application, so the released file behaves like the installed one.
+- `service.autostart` is now read.  It decides whether the units are
+  enabled after the installation; it is `true` by default.  Configurations
+  that were written by version 0.1.2 or older contain
+  `autostart = false`, because the option did not exist before.
+- The release workflow builds the executable inside a Fedora 45 container
+  and publishes it next to the archives; the checksum file covers it and
+  the verifier starts it before the release is published.
+- The CI workflow runs the test suite inside a Fedora 45 container.
+
+### Changed
+
+- The systemd units of a self contained installation run the installed
+  executable (`dontneed-dns run dns --config ...`) instead of an
+  interpreter with the module path.  A source installation is unchanged.
+- The installer tightens the permissions of the configuration file to
+  `0600`, so that no other user on the machine can change the routing.
+- The version of the project is 0.2.0.
+
+## [0.3.0] - 2026-11-20
+
+The transparent router of the Fedora edition.  The traffic of Discord and
+Roblox is routed without any setting in the applications.
+
+### Added
+
+- The transparent router.  It redirects the DNS queries of the user to
+  the local resolver, which answers the target domains over
+  DNS-over-HTTPS, redirects the TCP connections of the target addresses
+  to the transparent proxy, which splits the TLS ClientHello of the
+  matching connections, and routes the UDP traffic of the target
+  addresses into a TUN device, from where it is forwarded.
+- The addresses of the target domains are learned from the resolver
+  itself and refreshed every few minutes.  More addresses can be added
+  with `transparent.target_ips`.
+- The nftables tables `ip dontneed_dns` and `ip6 dontneed_dns6` and the
+  routing table 100 hold everything the router creates.  The firewall of
+  the machine is never touched, and everything is removed again when the
+  router stops.
+- The system unit `dontneed-dns-transparent.service`.  It executes as the
+  user who installed the project and has the single capability it needs,
+  `CAP_NET_ADMIN`.
+- The installer installs the router and asks for the administrator
+  rights only for the two commands that need them.  `--no-transparent`
+  leaves it out.
+- The option `transparent.resolver_source_port` sends the fallback
+  queries of the resolver from a port of its own, which the redirection
+  of the DNS queries skips.  Without it the resolver would redirect its
+  own fallback.
+
+### Changed
+
+- The version of the project is 0.3.0.
+
 ## [Unreleased]
 
 Repairs the Windows edition.  The Windows job of the workflow had been
