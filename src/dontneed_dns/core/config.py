@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from dontneed_dns.core.constants import (
+    DEFAULT_BYPASS_MARK,
     DEFAULT_DNS_HOST,
     DEFAULT_DNS_HOST_V6,
     DEFAULT_DNS_PORT,
@@ -23,11 +24,15 @@ from dontneed_dns.core.constants import (
     DEFAULT_FRAGMENT_PREAMBLE_DELAY_MS,
     DEFAULT_MAX_CONNECTIONS,
     DEFAULT_MAX_DNS_CONCURRENCY,
+    DEFAULT_NFT_TABLE,
     DEFAULT_PROXY_CONNECT_TIMEOUT,
     DEFAULT_PROXY_HOST,
     DEFAULT_PROXY_IDLE_TIMEOUT,
     DEFAULT_PROXY_PORT,
+    DEFAULT_RESOLVER_SOURCE_PORT,
     DEFAULT_SPLIT_DOMAINS,
+    DEFAULT_TRANSPARENT_TCP_PORT,
+    DEFAULT_TRANSPARENT_UDP_PORT,
 )
 from dontneed_dns.core.doh import DEFAULT_PROVIDERS, select_providers
 from dontneed_dns.core.errors import ConfigError
@@ -39,6 +44,7 @@ __all__ = [
     "LoggingConfig",
     "ProxyConfig",
     "ServiceConfig",
+    "TransparentConfig",
     "config_to_toml",
     "default_config",
     "load_config",
@@ -112,6 +118,47 @@ class LoggingConfig:
 
 
 @dataclass
+class TransparentConfig:
+    """Settings of the transparent router of the Fedora edition.
+
+    The router redirects the traffic of the user to the local proxies with
+    nftables.  It is disabled by default and switched on by the installer.
+    """
+
+    enabled: bool = False
+    #: The port of the transparent TCP proxy.
+    tcp_port: int = DEFAULT_TRANSPARENT_TCP_PORT
+    #: The port of the transparent UDP relay.
+    udp_port: int = DEFAULT_TRANSPARENT_UDP_PORT
+    #: The name of the nftables tables that belong to this project.
+    nft_table: str = DEFAULT_NFT_TABLE
+    #: The mark that the traffic of the router carries.  Marked packets
+    #: are never redirected, which prevents the routing loop.
+    bypass_mark: int = DEFAULT_BYPASS_MARK
+    #: The port the fallback queries of the resolver are sent from.  The
+    #: redirection of the DNS queries skips this port, so that the
+    #: resolver never redirects its own fallback.
+    resolver_source_port: int = DEFAULT_RESOLVER_SOURCE_PORT
+    #: Redirect the DNS queries of the user to the local resolver.
+    intercept_dns: bool = True
+    #: Redirect the TCP connections to the target addresses.
+    intercept_tcp: bool = True
+    #: Redirect the UDP datagrams to the target addresses.
+    intercept_udp: bool = True
+    #: Split the TLS ClientHello of the matching connections.
+    fragment: bool = True
+    #: Learn the addresses of the target domains from the resolver.
+    learn: bool = True
+    #: How often the target addresses are resolved again, in seconds.
+    refresh_seconds: float = 300.0
+    #: The domains whose connections are fragmented.  Empty means the
+    #: domains of ``dns.split_domains``.
+    sni_domains: list[str] = field(default_factory=list)
+    #: Additional addresses that are routed through the router.
+    target_ips: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     """The complete project configuration."""
 
@@ -119,6 +166,7 @@ class Config:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     service: ServiceConfig = field(default_factory=ServiceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    transparent: TransparentConfig = field(default_factory=TransparentConfig)
     path: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,6 +176,7 @@ class Config:
             "proxy": asdict(self.proxy),
             "service": asdict(self.service),
             "logging": asdict(self.logging),
+            "transparent": asdict(self.transparent),
         }
 
 
@@ -206,7 +255,7 @@ def parse_config(data: dict[str, Any], *, path: Path | None = None) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("the configuration must be a table")
 
-    known_sections = {"dns", "proxy", "service", "logging"}
+    known_sections = {"dns", "proxy", "service", "logging", "transparent"}
     unknown_sections = set(data) - known_sections
     if unknown_sections:
         names = ", ".join(sorted(unknown_sections))
@@ -216,8 +265,16 @@ def parse_config(data: dict[str, Any], *, path: Path | None = None) -> Config:
     proxy = _build(ProxyConfig, data.get("proxy", {}), "proxy")
     service = _build(ServiceConfig, data.get("service", {}), "service")
     logging = _build(LoggingConfig, data.get("logging", {}), "logging")
+    transparent = _build(TransparentConfig, data.get("transparent", {}), "transparent")
 
-    config = Config(dns=dns, proxy=proxy, service=service, logging=logging, path=path)
+    config = Config(
+        dns=dns,
+        proxy=proxy,
+        service=service,
+        logging=logging,
+        transparent=transparent,
+        path=path,
+    )
     validate_config(config)
     return config
 
@@ -287,6 +344,27 @@ def validate_config(config: Config) -> None:
     if config.logging.file is not None and not isinstance(config.logging.file, str):
         raise ConfigError("logging.file must be a path or null")
     _validate_bool(config.logging.redact, "logging.redact")
+
+    _validate_bool(config.transparent.enabled, "transparent.enabled")
+    _validate_port(config.transparent.tcp_port, "transparent.tcp_port")
+    _validate_port(config.transparent.udp_port, "transparent.udp_port")
+    _validate_int_range(config.transparent.bypass_mark, "transparent.bypass_mark", 1, 0xFFFF)
+    _validate_port(config.transparent.resolver_source_port, "transparent.resolver_source_port")
+    _validate_bool(config.transparent.intercept_dns, "transparent.intercept_dns")
+    _validate_bool(config.transparent.intercept_tcp, "transparent.intercept_tcp")
+    _validate_bool(config.transparent.intercept_udp, "transparent.intercept_udp")
+    _validate_bool(config.transparent.fragment, "transparent.fragment")
+    _validate_bool(config.transparent.learn, "transparent.learn")
+    _validate_timeout(config.transparent.refresh_seconds, "transparent.refresh_seconds")
+    if not isinstance(config.transparent.sni_domains, list):
+        raise ConfigError("transparent.sni_domains must be a list of domain names")
+    config.transparent.sni_domains = [
+        _validate_domain(domain, "transparent.sni_domains") for domain in config.transparent.sni_domains
+    ]
+    if not isinstance(config.transparent.target_ips, list):
+        raise ConfigError("transparent.target_ips must be a list of addresses")
+    for address in config.transparent.target_ips:
+        _validate_host(address, "transparent.target_ips")
 
 
 # ---------------------------------------------------------------------------

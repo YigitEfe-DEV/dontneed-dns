@@ -103,12 +103,15 @@ def run_command(
     env: Mapping[str, str] | None = None,
     cwd: str | Path | None = None,
     check: bool = False,
+    stdin: str | None = None,
 ) -> CommandResult:
     """Run ``argv`` without a shell and return a :class:`CommandResult`.
 
     ``shell=True`` is never used, so arguments cannot be interpolated into a
     shell command line.  A timeout is always applied so that a hung
-    administration tool cannot freeze the CLI or the TUI.
+    administration tool cannot freeze the CLI or the TUI.  ``stdin`` feeds
+    text to the command; it is used by the tools that read a ruleset from
+    the standard input.
     """
     args = [str(item) for item in argv]
     if not args:
@@ -128,6 +131,7 @@ def run_command(
             env=merged_env,
             cwd=str(cwd) if cwd is not None else None,
             check=False,
+            input=stdin,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")

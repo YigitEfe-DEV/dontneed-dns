@@ -35,6 +35,26 @@ No command of this project asks for a password.  The elevation is requested
 by the operating system when an operation that genuinely needs it is
 started, and only for that operation.
 
+## The transparent router
+
+The transparent router changes the nftables rules and the routing table
+of the machine, so it needs the `CAP_NET_ADMIN` capability.  It runs as
+a system service that executes as the user who installed it and has that
+single capability; it cannot read files, it cannot change the processes
+of other users and it cannot load a module.
+
+The rules live in two tables of their own, `ip dontneed_dns` and
+`ip6 dontneed_dns6`, and in a routing table of their own.  The firewall
+of the machine, including the rules of firewalld, is never read,
+changed or flushed.  Everything the router creates is removed again when
+it stops, and the unit removes the tables a second time when it is
+killed.
+
+The router does not change `/etc/resolv.conf`, the settings of
+NetworkManager or the settings of systemd-resolved.  The DNS queries of
+the user are redirected with a rule of the project and the rule is
+removed again with it.
+
 ## The self contained executable
 
 The Fedora edition is shipped as one file that carries the interpreter and

@@ -27,9 +27,13 @@ from dontneed_dns.core.config import Config, default_config, load_config, save_c
 from dontneed_dns.core.errors import ConfigError
 from dontneed_dns.core.health import Severity, run_health_checks
 from dontneed_dns.core.paths import bin_dir, config_path, data_dir, install_dir, log_dir
-from dontneed_dns.core.system import is_linux, is_root
+from dontneed_dns.core.system import is_linux, is_root, run_command
 from dontneed_dns.platforms.base import Component, OperationResult
-from dontneed_dns.platforms.linux.adapter import INSTALLED_BINARY_NAME, LinuxPlatformAdapter
+from dontneed_dns.platforms.linux.adapter import (
+    INSTALLED_BINARY_NAME,
+    LinuxPlatformAdapter,
+    current_user_name,
+)
 from dontneed_dns.platforms.linux.distro import detect_distro
 
 __all__ = [
@@ -70,10 +74,10 @@ class Step:
     @property
     def marker(self) -> str:
         """A short marker for the report."""
-        if not self.ok:
-            return "FAIL"
         if self.warning:
             return "WARN"
+        if not self.ok:
+            return "FAIL"
         return "OK"
 
 
@@ -96,6 +100,8 @@ class Installer:
     frozen: bool = field(default_factory=lambda: getattr(sys, "frozen", False))
     #: Overrides ``service.autostart`` from the configuration file.
     autostart_override: bool | None = None
+    #: Install the transparent router.  It needs administrator rights.
+    transparent: bool = True
     steps: list[Step] = field(default_factory=list)
 
     # -- helpers ----------------------------------------------------------
@@ -352,6 +358,54 @@ class Installer:
             return self._fail("Startup", "; ".join(failures))
         return self._record("Startup", True, "the DNS resolver and the proxy are running")
 
+    def _install_transparent(self, adapter: LinuxPlatformAdapter, config: Config) -> Step:
+        """Install and start the transparent router.
+
+        The unit is a system unit, because the router has to change the
+        nftables rules of the machine.  The unit itself runs as the user
+        that installs it, with a single capability.
+        """
+        if not config.transparent.enabled:
+            return self._record(
+                "Transparent routing",
+                True,
+                "disabled in the configuration; the applications keep their own proxy settings",
+                warning=True,
+            )
+
+        elevated, reason = ensure_elevation()
+        if not elevated:
+            return self._record(
+                "Transparent routing",
+                False,
+                "the administrator rights are needed to install the router "
+                f"({reason}); run the installer with sudo to enable it",
+                warning=True,
+            )
+
+        account = current_user_name()
+        result = adapter.install_transparent(user=account)
+        if not result.ok:
+            return self._record("Transparent routing", False, result.message, warning=True)
+
+        started = run_command(
+            ["sudo", "-n", "systemctl", "restart", "dontneed-dns-transparent.service"],
+            timeout=60.0,
+        )
+        if not started.ok:
+            adapter.uninstall_transparent()
+            return self._record(
+                "Transparent routing",
+                False,
+                "the transparent router could not be started; it was removed again",
+                warning=True,
+            )
+        return self._record(
+            "Transparent routing",
+            True,
+            "the router is installed, enabled and running",
+        )
+
     def _health(self, config: Config) -> Step:
         """Run the health checks and summarise them."""
         runner = self.health_runner or (lambda item: run_health_checks(item, timeout=5.0))
@@ -386,11 +440,18 @@ class Installer:
                 warning=True,
             )
         config, _config_step = self._prepare_config()
+        if (
+            self.transparent
+            and config.transparent.enabled is False
+            and enable_transparent_in_config(self.target_config)
+        ):
+            config = load_config(self.target_config)
         if not self._register(adapter, config).ok:
             return 1
         self._apply_autostart(adapter, config)
         if not self._start(adapter).ok:
             return 1
+        self._install_transparent(adapter, config)
         if self.startup_wait > 0:
             time.sleep(self.startup_wait)
         self._health(config)
@@ -435,6 +496,21 @@ class Installer:
             else:
                 self._record("Application", True, "nothing to remove")
 
+        elevated, reason = ensure_elevation()
+        if elevated:
+            result = adapter.uninstall_transparent()
+            if result.ok:
+                self._record("Transparent routing", True, "the router and its rules were removed")
+            else:
+                self._record("Transparent routing", False, result.message, warning=True)
+        else:
+            self._record(
+                "Transparent routing",
+                False,
+                f"the router could not be removed ({reason}); the administrator rights are needed",
+                warning=True,
+            )
+
         for name in ("dontneed-dns-dns.pid", "dontneed-dns-proxy.pid"):
             stale = data_dir() / name
             try:
@@ -477,6 +553,11 @@ class Installer:
                 state is not None,
                 f"{state.label}, starts automatically: {autostart}",
             )
+        try:
+            transparent = adapter.transparent_status()
+            self._record("Transparent routing", True, transparent.label)
+        except Exception as exc:  # noqa: BLE001 - the status must not fail
+            self._record("Transparent routing", True, f"unknown ({exc})")
         return 0
 
 
@@ -502,6 +583,7 @@ Options:
   --config PATH     use a different configuration file
   --autostart       start the services automatically after every login
   --no-autostart    do not start the services automatically after every login
+  --no-transparent  do not install the transparent router
   --yes             do not ask for a confirmation
   --version         print the version and exit
   --help            print this text and exit
@@ -516,6 +598,69 @@ The installation writes only into your home directory:
   {config_path}    the configuration
   {log_dir}        the log files
 """
+
+
+def ensure_elevation() -> tuple[bool, str]:
+    """Ask for administrator rights once.
+
+    The password is typed by the user into the terminal of ``sudo``; the
+    credential is then cached and the single privileged operation can run
+    without a prompt.  Returns ``(True, "")`` when the rights are there.
+    """
+    if os.geteuid() == 0:
+        return True, ""
+    if shutil.which("sudo") is None:
+        return False, "sudo is not installed on this system"
+    import subprocess
+
+    try:
+        # The terminal is inherited, so that sudo can ask for the password.
+        result = subprocess.run(["sudo", "-v"])
+    except OSError as exc:
+        return False, f"sudo could not be started: {exc}"
+    if result.returncode != 0:
+        return False, "the administrator rights could not be obtained"
+    return True, ""
+
+
+def enable_transparent_in_config(path: Path) -> bool:
+    """Switch the transparent router on in the configuration file.
+
+    The file is edited as text, so that the comments and the order of the
+    other options survive.  Returns ``True`` when the file changed.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    in_section = False
+    changed = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_section = stripped == "[transparent]"
+            continue
+        if not in_section:
+            continue
+        if stripped.startswith("enabled"):
+            if stripped.split("=", 1)[1].strip() != "true":
+                lines[index] = "enabled = true"
+                changed = True
+            break
+    else:
+        if "[transparent]" not in text:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append("[transparent]")
+            lines.append("enabled = true")
+            changed = True
+    if changed:
+        try:
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            return False
+    return changed
 
 
 def _print_steps(steps: list[Step]) -> None:
@@ -558,6 +703,10 @@ def main(argv: list[str] | None = None) -> int:
     if "--purge" in args:
         purge = True
         args.remove("--purge")
+    transparent = True
+    if "--no-transparent" in args:
+        transparent = False
+        args.remove("--no-transparent")
     autostart_override: bool | None = None
     if "--autostart" in args:
         autostart_override = True
@@ -569,7 +718,11 @@ def main(argv: list[str] | None = None) -> int:
         if flag in args:
             args.remove(flag)
 
-    installer = Installer(config_path=config, autostart_override=autostart_override)
+    installer = Installer(
+        config_path=config,
+        autostart_override=autostart_override,
+        transparent=transparent,
+    )
 
     if "--status" in args:
         args.remove("--status")

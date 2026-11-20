@@ -54,6 +54,39 @@ The Windows executable is **not digitally signed**.  Windows shows a
 warning the first time it is started; compare the checksum before doing
 anything about it.
 
+## Transparent routing on Fedora
+
+The Fedora edition can route the traffic of Discord and Roblox without
+any setting in the application:
+
+* the DNS queries of the user are redirected to the local resolver, which
+  answers the target domains over DNS-over-HTTPS,
+* the TCP connections to the target addresses are redirected to the
+  transparent proxy, which can split the TLS ClientHello into small
+  pieces,
+* the UDP traffic of the target addresses is routed into a TUN device and
+  forwarded, so that the traffic of a game server keeps working.
+
+The rules live in two nftables tables of their own, `ip dontneed_dns` and
+`ip6 dontneed_dns6`, and in a routing table of their own.  The firewall
+of the machine, including the rules of firewalld, is never touched, and
+everything is removed again when the router stops.
+
+The router needs the `CAP_NET_ADMIN` capability, because it changes the
+rules of the machine.  It therefore runs as a system service that executes
+as the user who installed it, with that single capability.  The
+installation asks for the administrator rights only for the two commands
+that need them.
+
+```bash
+dontneed-dns-fedora-x86_64 --install      # the transparent router as well
+dontneed-dns-fedora-x86_64 --no-transparent
+```
+
+The addresses of the target domains are learned from the resolver itself
+and refreshed every few minutes.  Additional addresses can be added with
+the option `transparent.target_ips` of the configuration file.
+
 ## Installation on Fedora (single executable)
 
 Download `dontneed-dns-fedora-x86_64`, make it executable and run it:

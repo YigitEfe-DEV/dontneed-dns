@@ -173,6 +173,38 @@ and the state below `~/.local/state/dontneed-dns`.  It never asks for
 root privileges and it never changes the firewall, the routing table or
 `/etc/resolv.conf`.
 
+## The transparent router
+
+The transparent router is the fourth part of the project.  It consists
+of the modules below `dontneed_dns/transparent`:
+
+| Module | Responsibility |
+| --- | --- |
+| `nft.py` | The nftables tables, the chains and the sets of the project |
+| `tun.py` | The TUN device and the routing table of the project |
+| `tcp.py` | The transparent TCP proxy; it reads the original destination and splits the TLS ClientHello |
+| `udp_tun.py` | The UDP relay; it reads the packets of the TUN device and forwards them |
+| `sni.py` | The parser of the TLS ClientHello |
+| `targets.py` | The addresses of the target domains and the file they are learned into |
+| `service.py` | The runner of the router: the rules, the routes and the proxies |
+
+Three mechanisms decide where a packet goes:
+
+1. the DNS queries of the user are redirected to the local resolver with
+   nftables.  The fallback queries of the resolver use a port of their
+   own, which the redirection skips, so that the resolver never redirects
+   its own fallback,
+2. the TCP connections to the target addresses are redirected to the
+   transparent proxy.  The kernel keeps the original destination and
+   hands it out with `SO_ORIGINAL_DST`,
+3. the UDP traffic of the target addresses is routed into a TUN device.
+   A redirect would destroy the address the datagram was sent to, and the
+   receiver of a game server needs it.
+
+The traffic of the router itself carries a mark.  The rules skip the
+marked packets and the routing rules send them through the main table.
+That is the protection against the routing loop.
+
 ## Testing strategy
 
 * `tests/unit` - pure logic: DNS messages, the DoH client, the resolver, the

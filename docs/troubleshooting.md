@@ -219,6 +219,39 @@ configuration file, so the split domains and the fragmentation settings
 survive an update.  Use `dontneed-dns config show` to see what is in
 effect.
 
+## The transparent router does not start
+
+The router needs the `CAP_NET_ADMIN` capability.  The unit of the router
+is a system unit; if it is missing, the installation was not able to ask
+for the administrator rights.
+
+```bash
+systemctl status dontneed-dns-transparent.service
+journalctl -u dontneed-dns-transparent.service -n 50
+```
+
+## The traffic of an application is not redirected
+
+The router only redirects the addresses that it knows.  The addresses of
+the target domains are learned from the resolver; the traffic of a game
+server is reached over an address that the application got from an
+interface, and that address is not known.
+
+```bash
+sudo nft list table ip dontneed_dns
+```
+
+The set `targets` shows the addresses that are redirected.  Additional
+addresses can be added with the option `transparent.target_ips` of the
+configuration file.
+
+## The DNS queries of the applications are not answered
+
+The redirection of the DNS queries points at the local resolver.  When
+the resolver is not running, the router removes the redirection, so that
+no query is lost.  The router does this on its own; the message "the
+resolver does not answer" in the journal tells the story.
+
 ## Collecting a report for a bug report
 
 ```bash

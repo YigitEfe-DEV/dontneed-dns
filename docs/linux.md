@@ -109,6 +109,49 @@ files and the installed executable.  The configuration is kept; add
 `--purge` to remove it.  Files that do not belong to this project, such as
 a virtual environment of an older installation, are never touched.
 
+## Transparent routing
+
+The transparent router removes the need to configure the applications.
+It is installed with the single executable and it is switched on by the
+installer.
+
+| Traffic | What happens |
+| --- | --- |
+| DNS queries of the user | redirected to the local resolver, which answers the target domains over DNS-over-HTTPS |
+| TCP to a target address | redirected to the transparent proxy, which splits the TLS ClientHello when the server name matches |
+| UDP to a target address | routed into a TUN device and forwarded with the original address of the client |
+
+### How it is built
+
+* the nftables tables `ip dontneed_dns` and `ip6 dontneed_dns6` hold the
+  rules; they are the only rules the project creates and the only ones it
+  removes,
+* the routing table 100 holds the routes of the targets, and a rule that
+  sends the traffic of the user into it; every other traffic falls through
+  to the main table,
+* the traffic of the router itself carries a mark, which keeps it away
+  from the redirection and from the TUN device; that is what prevents the
+  routing loop,
+* the fallback queries of the resolver are sent from the port
+  `transparent.resolver_source_port`, and the redirection of the DNS
+  queries skips that port, so that the resolver never redirects its own
+  fallback.
+
+### The privileges
+
+The router changes the rules of the machine and therefore needs the
+`CAP_NET_ADMIN` capability.  It runs as a system service
+(`dontneed-dns-transparent.service`) that executes as the user who
+installed it and has that single capability.  The DNS resolver and the
+proxy keep running as the user in the user scope of systemd.
+
+### The removal
+
+`dontneed-dns-fedora-x86_64 --uninstall` stops the router, removes the
+two tables, the routes and the rules, and removes the unit file.  The
+configuration of the firewall of the machine is never changed, so
+nothing has to be restored there.
+
 ## Installation from the release archive
 
 ```bash

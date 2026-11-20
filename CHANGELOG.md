@@ -45,6 +45,41 @@ environment and no archive extraction are needed on the target machine.
   `0600`, so that no other user on the machine can change the routing.
 - The version of the project is 0.2.0.
 
+## [0.3.0] - 2026-11-20
+
+The transparent router of the Fedora edition.  The traffic of Discord and
+Roblox is routed without any setting in the applications.
+
+### Added
+
+- The transparent router.  It redirects the DNS queries of the user to
+  the local resolver, which answers the target domains over
+  DNS-over-HTTPS, redirects the TCP connections of the target addresses
+  to the transparent proxy, which splits the TLS ClientHello of the
+  matching connections, and routes the UDP traffic of the target
+  addresses into a TUN device, from where it is forwarded.
+- The addresses of the target domains are learned from the resolver
+  itself and refreshed every few minutes.  More addresses can be added
+  with `transparent.target_ips`.
+- The nftables tables `ip dontneed_dns` and `ip6 dontneed_dns6` and the
+  routing table 100 hold everything the router creates.  The firewall of
+  the machine is never touched, and everything is removed again when the
+  router stops.
+- The system unit `dontneed-dns-transparent.service`.  It executes as the
+  user who installed the project and has the single capability it needs,
+  `CAP_NET_ADMIN`.
+- The installer installs the router and asks for the administrator
+  rights only for the two commands that need them.  `--no-transparent`
+  leaves it out.
+- The option `transparent.resolver_source_port` sends the fallback
+  queries of the resolver from a port of its own, which the redirection
+  of the DNS queries skips.  Without it the resolver would redirect its
+  own fallback.
+
+### Changed
+
+- The version of the project is 0.3.0.
+
 ## [Unreleased]
 
 Repairs the Windows edition.  The Windows job of the workflow had been
