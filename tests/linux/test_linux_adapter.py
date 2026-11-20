@@ -26,6 +26,13 @@ pytestmark = [
 ]
 
 
+#: The tests below need a running systemd; a container has none.
+systemd_required = pytest.mark.skipif(
+    not Path("/run/systemd/system").exists(),
+    reason="the tests of the services need a running systemd",
+)
+
+
 class FakeSystemctl:
     """Records the calls and answers with scripted results."""
 
@@ -58,37 +65,44 @@ def adapter() -> LinuxPlatformAdapter:
     return LinuxPlatformAdapter()
 
 
+@systemd_required
 def test_the_adapter_names_itself_linux(adapter: LinuxPlatformAdapter) -> None:
     assert adapter.name == "linux"
 
 
+@systemd_required
 def test_the_capability_matrix_is_the_linux_one(adapter: LinuxPlatformAdapter) -> None:
     assert adapter.capabilities().platform == "linux"
 
 
+@systemd_required
 def test_a_running_unit_is_reported_as_running(adapter, systemctl) -> None:
     systemctl.answers["LoadState"] = CommandResult(("",), 0, "loaded\n", "")
     systemctl.answers["is-active"] = CommandResult(("",), 0, "active\n", "")
     assert adapter.status(Component.DNS) is ServiceState.RUNNING
 
 
+@systemd_required
 def test_a_stopped_unit_is_reported_as_stopped(adapter, systemctl) -> None:
     systemctl.answers["LoadState"] = CommandResult(("",), 0, "loaded\n", "")
     systemctl.answers["is-active"] = CommandResult(("",), 3, "inactive\n", "")
     assert adapter.status(Component.DNS) is ServiceState.STOPPED
 
 
+@systemd_required
 def test_a_failed_unit_is_reported_as_failed(adapter, systemctl) -> None:
     systemctl.answers["LoadState"] = CommandResult(("",), 0, "loaded\n", "")
     systemctl.answers["is-active"] = CommandResult(("",), 3, "failed\n", "")
     assert adapter.status(Component.PROXY) is ServiceState.FAILED
 
 
+@systemd_required
 def test_a_missing_unit_is_reported_as_not_installed(adapter, systemctl) -> None:
     systemctl.answers["LoadState"] = CommandResult(("",), 0, "not-found\n", "")
     assert adapter.status(Component.DNS) is ServiceState.NOT_INSTALLED
 
 
+@systemd_required
 def test_the_user_scope_uses_systemctl_user(adapter, systemctl) -> None:
     adapter.scope = "user"
     adapter.start(Component.DNS)
@@ -96,12 +110,14 @@ def test_the_user_scope_uses_systemctl_user(adapter, systemctl) -> None:
     assert "--user" in systemctl.calls[-1]
 
 
+@systemd_required
 def test_the_system_scope_does_not_use_systemctl_user(adapter, systemctl) -> None:
     adapter.scope = "system"
     adapter.start(Component.DNS)
     assert "--user" not in systemctl.calls[-1]
 
 
+@systemd_required
 def test_start_uses_the_right_unit_name(adapter, systemctl) -> None:
     adapter.start(Component.DNS)
     assert "dontneed-dns-dns.service" in systemctl.calls[-1]
@@ -110,6 +126,7 @@ def test_start_uses_the_right_unit_name(adapter, systemctl) -> None:
     assert "dontneed-dns-proxy.service" in systemctl.calls[-1]
 
 
+@systemd_required
 def test_a_failing_start_is_reported(adapter, systemctl) -> None:
     systemctl.default = CommandResult(("",), 1, "", "Unit not found")
     result = adapter.start(Component.DNS)
@@ -117,6 +134,7 @@ def test_a_failing_start_is_reported(adapter, systemctl) -> None:
     assert "failed" in result.message
 
 
+@systemd_required
 def test_the_autostart_state_is_read(adapter, systemctl) -> None:
     systemctl.answers["is-enabled"] = CommandResult(("",), 0, "enabled\n", "")
     assert adapter.is_enabled(Component.DNS) is True
@@ -128,6 +146,7 @@ def test_the_autostart_state_is_read(adapter, systemctl) -> None:
     assert adapter.is_enabled(Component.DNS) is None
 
 
+@systemd_required
 def test_enable_and_disable_call_systemctl(adapter, systemctl) -> None:
     adapter.enable(Component.DNS)
     assert "enable" in systemctl.calls[-1]
@@ -136,6 +155,7 @@ def test_enable_and_disable_call_systemctl(adapter, systemctl) -> None:
     assert "disable" in systemctl.calls[-1]
 
 
+@systemd_required
 def test_the_logs_are_read_from_the_journal(adapter, systemctl) -> None:
     systemctl.answers["journalctl"] = CommandResult(("",), 0, "line one\nline two\n", "")
     result = adapter.logs(Component.DNS, lines=10)
@@ -144,6 +164,7 @@ def test_the_logs_are_read_from_the_journal(adapter, systemctl) -> None:
     assert "journalctl" in systemctl.calls[-1]
 
 
+@systemd_required
 def test_install_writes_the_unit_file(adapter, systemctl, tmp_path, monkeypatch) -> None:
     unit_dir = tmp_path / "systemd" / "user"
     monkeypatch.setattr(linux.adapter, "SYSTEMD_USER_UNIT_DIR", unit_dir)
@@ -160,6 +181,7 @@ def test_install_writes_the_unit_file(adapter, systemctl, tmp_path, monkeypatch)
     assert systemctl.called("enable")
 
 
+@systemd_required
 def test_install_is_idempotent(adapter, systemctl, tmp_path, monkeypatch) -> None:
     unit_dir = tmp_path / "systemd" / "user"
     monkeypatch.setattr(linux.adapter, "SYSTEMD_USER_UNIT_DIR", unit_dir)
@@ -172,6 +194,7 @@ def test_install_is_idempotent(adapter, systemctl, tmp_path, monkeypatch) -> Non
     assert first == second
 
 
+@systemd_required
 def test_the_unit_file_names_the_right_component(adapter, systemctl, tmp_path, monkeypatch) -> None:
     unit_dir = tmp_path / "systemd" / "user"
     monkeypatch.setattr(linux.adapter, "SYSTEMD_USER_UNIT_DIR", unit_dir)
@@ -181,6 +204,7 @@ def test_the_unit_file_names_the_right_component(adapter, systemctl, tmp_path, m
     assert "dontneed_dns.service_runner proxy" in content
 
 
+@systemd_required
 def test_uninstall_removes_the_unit_file(adapter, systemctl, tmp_path, monkeypatch) -> None:
     unit_dir = tmp_path / "systemd" / "user"
     monkeypatch.setattr(linux.adapter, "SYSTEMD_USER_UNIT_DIR", unit_dir)
@@ -193,6 +217,7 @@ def test_uninstall_removes_the_unit_file(adapter, systemctl, tmp_path, monkeypat
     assert systemctl.called("disable --now")
 
 
+@systemd_required
 def test_uninstall_does_not_touch_the_other_component(adapter, systemctl, tmp_path, monkeypatch) -> None:
     unit_dir = tmp_path / "systemd" / "user"
     monkeypatch.setattr(linux.adapter, "SYSTEMD_USER_UNIT_DIR", unit_dir)
@@ -205,6 +230,7 @@ def test_uninstall_does_not_touch_the_other_component(adapter, systemctl, tmp_pa
     assert (unit_dir / "dontneed-dns-proxy.service").exists()
 
 
+@systemd_required
 def test_a_system_scope_installation_without_root_asks_for_elevation(adapter, systemctl, monkeypatch) -> None:
     monkeypatch.setattr(linux.adapter, "is_root", lambda: False)
     result = adapter.install(Component.DNS, scope="system")
@@ -212,6 +238,7 @@ def test_a_system_scope_installation_without_root_asks_for_elevation(adapter, sy
     assert result.requires_elevation
 
 
+@systemd_required
 def test_a_system_scope_uninstallation_without_root_asks_for_elevation(
     adapter, systemctl, monkeypatch
 ) -> None:
@@ -221,6 +248,7 @@ def test_a_system_scope_uninstallation_without_root_asks_for_elevation(
     assert result.requires_elevation
 
 
+@systemd_required
 def test_the_diagnostics_do_not_leak_secrets(adapter) -> None:
     data = adapter.diagnostics()
     assert data["platform"] == "linux"
@@ -230,6 +258,7 @@ def test_the_diagnostics_do_not_leak_secrets(adapter) -> None:
         assert "unit" in component
 
 
+@systemd_required
 def test_the_install_paths_are_reported(adapter) -> None:
     paths = adapter.install_paths("user")
     assert "config" in paths
@@ -237,12 +266,14 @@ def test_the_install_paths_are_reported(adapter) -> None:
     assert paths["dns_unit"].name == "dontneed-dns-dns.service"
 
 
+@systemd_required
 def test_the_unit_directory_follows_xdg_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """systemd reads the user units from ``$XDG_CONFIG_HOME``."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     assert linux.adapter._user_unit_dir() == tmp_path / "systemd" / "user"
 
 
+@systemd_required
 def test_the_unit_directory_falls_back_to_the_home_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

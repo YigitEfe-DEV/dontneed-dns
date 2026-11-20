@@ -25,6 +25,14 @@ pytestmark = [
 ]
 
 
+#: The installation registers the systemd user services, so a running
+#: systemd is needed.
+systemd_required = pytest.mark.skipif(
+    not Path("/run/systemd/system").exists(),
+    reason="the installation of the services needs a running systemd",
+)
+
+
 class FakeSystemctl:
     """Records every systemctl call and answers plausibly."""
 
@@ -72,11 +80,15 @@ def installer(tmp_path: Path, unit_dir: Path) -> Installer:
         target_binary=tmp_path / "install" / "bin" / "dontneed-dns",
         health_runner=lambda config: [],
         startup_wait=0.0,
+        # The transparent router needs the administrator rights; it has its
+        # own tests.
+        transparent=False,
     )
     instance.frozen = True
     return instance
 
 
+@systemd_required
 def test_the_installation_writes_the_application_the_units_and_the_configuration(
     installer, tmp_path, systemctl
 ) -> None:
@@ -102,6 +114,7 @@ def test_the_installation_writes_the_application_the_units_and_the_configuration
     assert f"{binary} run proxy --config {config}" in proxy_unit.read_text(encoding="utf-8")
 
 
+@systemd_required
 def test_the_services_are_enabled_and_started(installer, systemctl) -> None:
     assert installer.install() == 0
     assert systemctl.called("enable")
@@ -109,6 +122,7 @@ def test_the_services_are_enabled_and_started(installer, systemctl) -> None:
     assert systemctl.called("daemon-reload")
 
 
+@systemd_required
 def test_the_automatic_start_follows_the_configuration(installer, systemctl) -> None:
     installer.install()
     assert systemctl.called("enable")
@@ -119,6 +133,7 @@ def test_the_automatic_start_follows_the_configuration(installer, systemctl) -> 
     assert systemctl.called("disable")
 
 
+@systemd_required
 def test_the_uninstallation_removes_only_what_the_project_owns(installer, tmp_path, systemctl) -> None:
     installer.install()
     binary = tmp_path / "install" / "bin" / "dontneed-dns"
@@ -131,6 +146,7 @@ def test_the_uninstallation_removes_only_what_the_project_owns(installer, tmp_pa
     assert config.exists(), "the configuration must be kept without --purge"
 
 
+@systemd_required
 def test_the_uninstallation_can_remove_the_configuration(installer, tmp_path) -> None:
     installer.install()
     config = tmp_path / "config.toml"
@@ -139,6 +155,7 @@ def test_the_uninstallation_can_remove_the_configuration(installer, tmp_path) ->
     assert not config.exists()
 
 
+@systemd_required
 def test_a_reinstallation_works(installer, tmp_path, systemctl) -> None:
     assert installer.install() == 0
     binary = tmp_path / "install" / "bin" / "dontneed-dns"

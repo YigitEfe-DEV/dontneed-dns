@@ -496,20 +496,23 @@ class Installer:
             else:
                 self._record("Application", True, "nothing to remove")
 
-        elevated, reason = ensure_elevation()
-        if elevated:
+        installed = adapter.transparent_unit_path().exists()
+        elevated, reason = (True, "") if not installed else ensure_elevation()
+        if elevated and installed:
             result = adapter.uninstall_transparent()
             if result.ok:
                 self._record("Transparent routing", True, "the router and its rules were removed")
             else:
                 self._record("Transparent routing", False, result.message, warning=True)
-        else:
+        elif installed:
             self._record(
                 "Transparent routing",
                 False,
                 f"the router could not be removed ({reason}); the administrator rights are needed",
                 warning=True,
             )
+        else:
+            self._record("Transparent routing", True, "there was no router to remove")
 
         for name in ("dontneed-dns-dns.pid", "dontneed-dns-proxy.pid"):
             stale = data_dir() / name
@@ -612,11 +615,18 @@ def ensure_elevation() -> tuple[bool, str]:
     if shutil.which("sudo") is None:
         return False, "sudo is not installed on this system"
     import subprocess
+    import sys
 
     try:
+        # A cached credential or a rule without a password is enough.
+        cached = subprocess.run(["sudo", "-n", "-v"], capture_output=True, text=True, timeout=30)
+        if cached.returncode == 0:
+            return True, ""
+        if not sys.stdin.isatty():
+            return False, "the administrator rights are needed and cannot be asked for here"
         # The terminal is inherited, so that sudo can ask for the password.
         result = subprocess.run(["sudo", "-v"])
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return False, f"sudo could not be started: {exc}"
     if result.returncode != 0:
         return False, "the administrator rights could not be obtained"
