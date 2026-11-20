@@ -68,6 +68,23 @@ class FakeAdapter:
     def is_available(self) -> bool:
         return True
 
+    def install_transparent(self, *, user: str | None = None):
+        from dontneed_dns.platforms.base import OperationResult
+
+        self.calls.append("install_transparent")
+        return OperationResult.success("the transparent router is installed")
+
+    def uninstall_transparent(self):
+        from dontneed_dns.platforms.base import OperationResult
+
+        self.calls.append("uninstall_transparent")
+        return OperationResult.success("the transparent router is removed")
+
+    def transparent_status(self):
+        from dontneed_dns.platforms.base import ServiceState
+
+        return ServiceState.NOT_INSTALLED
+
     def describe(self) -> str:
         return "fake"
 

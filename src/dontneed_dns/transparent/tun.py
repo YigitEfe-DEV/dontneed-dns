@@ -11,7 +11,6 @@ relay knows where they were sent and to which port.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import socket
 import struct
@@ -51,6 +50,8 @@ class TunDevice:
         """Create the device and bring it up."""
         if self._fd is not None:
             return
+        import fcntl
+
         try:
             fd = os.open("/dev/net/tun", os.O_RDWR)
         except OSError as exc:

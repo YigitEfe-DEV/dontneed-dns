@@ -113,15 +113,14 @@ jobs:
       # container has no git and the checkout needs it.
       - name: Install the build tools
         run: |
-          dnf -y install git python3 python3-pip python3-pip-wheel python3-devel gcc libffi-devel
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install pytest pytest-cov typer rich textual pyinstaller
+          dnf -y install git python3 python3-pip python3-devel gcc libffi-devel
+          python3 -m pip install --break-system-packages --upgrade pip
+          python3 -m pip install --break-system-packages pytest pytest-cov typer rich textual pyinstaller
 
       - uses: actions/checkout@v4
 
       - name: Build the executable
-        run: .venv/bin/python scripts/build_fedora_executable.py --output dist
+        run: python3 scripts/build_fedora_executable.py --output dist
 
       - name: Upload the executable
         uses: actions/upload-artifact@v4
