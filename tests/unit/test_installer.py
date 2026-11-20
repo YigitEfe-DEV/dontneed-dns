@@ -111,7 +111,9 @@ class FakeAdapter:
 
 
 @pytest.fixture
-def installer(tmp_path: Path) -> Installer:
+def installer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Installer:
+    # The installer needs a user session for the systemd user services.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     payload = tmp_path / "payload"
     payload.write_bytes(b"#!/bin/sh\necho payload\n")
     return Installer(
