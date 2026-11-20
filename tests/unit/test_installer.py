@@ -1,4 +1,8 @@
-"""Unit tests of the self contained installer."""
+"""Unit tests of the self contained installer.
+
+The installer of the executable is a part of the Fedora edition, so the
+tests that touch the paths and the units of Linux only run on Linux.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,11 @@ from dontneed_dns.core.paths import bin_dir, install_dir
 from dontneed_dns.installer import Installer, main
 from dontneed_dns.platforms.base import Component, ServiceState
 from dontneed_dns.platforms.linux.adapter import LinuxPlatformAdapter
+
+linux_only = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the installer of the executable is a part of the Linux edition",
+)
 
 
 class FakeAdapter:
@@ -131,6 +140,7 @@ def test_version_prints_the_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert "dontneed-dns" in capsys.readouterr().out
 
 
+@linux_only
 def test_the_installer_runs_without_arguments(installer, monkeypatch, capsys) -> None:
     monkeypatch.setattr("dontneed_dns.installer.Installer", lambda **kwargs: installer)
     assert main([]) == 0
@@ -209,6 +219,7 @@ def test_the_automatic_start_is_disabled_when_the_configuration_forbids_it(insta
 # ------------------------------------------------------------ the adapter
 
 
+@linux_only
 def test_the_unit_starts_the_installed_executable(tmp_path) -> None:
     binary = tmp_path / "bin" / "dontneed-dns"
     adapter = LinuxPlatformAdapter(executable=str(binary))
@@ -233,6 +244,7 @@ def test_a_source_installation_still_uses_the_module(monkeypatch) -> None:
     assert "dontneed_dns.service_runner" in command
 
 
+@linux_only
 def test_the_unit_file_contains_the_configured_path(tmp_path, monkeypatch) -> None:
     binary = tmp_path / "bin" / "dontneed-dns"
     adapter = LinuxPlatformAdapter(executable=str(binary))
@@ -244,18 +256,21 @@ def test_the_unit_file_contains_the_configured_path(tmp_path, monkeypatch) -> No
 # ------------------------------------------------------------- the paths
 
 
+@linux_only
 def test_the_installation_directory_follows_xdg_data_home(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     assert install_dir() == tmp_path / "dontneed-dns"
     assert bin_dir() == tmp_path / "dontneed-dns" / "bin"
 
 
+@linux_only
 def test_the_installation_directory_falls_back_to_the_home_directory(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     assert install_dir() == tmp_path / ".local" / "share" / "dontneed-dns"
 
 
+@linux_only
 def test_the_payload_is_installed_with_the_right_permissions(installer, tmp_path) -> None:
     installer.frozen = True
     step = installer._write_payload()
