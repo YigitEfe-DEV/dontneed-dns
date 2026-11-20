@@ -27,12 +27,30 @@ It is a narrow tool for a narrow problem.
 | Starting and stopping the components | no privileges (systemd user units) | no privileges (scheduled task) |
 | Automatic startup | no privileges | no privileges |
 | Installing into the user scope | no privileges | no privileges |
+| Installing the Fedora executable | no privileges (only the home directory is written) | not applicable |
 | Installing into the system scope | root | administrator |
 | Reading the journal | no privileges for user units | not applicable |
 
 No command of this project asks for a password.  The elevation is requested
 by the operating system when an operation that genuinely needs it is
 started, and only for that operation.
+
+## The self contained executable
+
+The Fedora edition is shipped as one file that carries the interpreter and
+every dependency.  It is **not digitally signed**, exactly like the
+Windows executable.  Compare the SHA-256 checksum of the download with
+the `SHA256SUMS` file of the release before running it.
+
+The file is built by PyInstaller, whose bootloader is GPL with an
+exception; the licence of the bootloader is listed below.  The executable
+is unpacked into a temporary directory by the operating system when it
+starts, which is why the units run it with `PrivateTmp=yes`.
+
+The installer writes only into the home directory of the user that runs
+it, never asks for root privileges and never starts the components as
+root.  It does not change the firewall, the routing table or
+`/etc/resolv.conf`.
 
 ## TLS
 
@@ -85,7 +103,7 @@ routable address.
 | textual | MIT | Terminal user interface |
 | pytest | MIT | Test suite (development only) |
 | ruff | MIT | Linting and formatting (development only) |
-| pyinstaller | GPL with a bootloader exception | Building the Windows executable (development only) |
+| pyinstaller | GPL with a bootloader exception | Building the Windows and the Fedora executable (development only) |
 
 The licences of the bundled wheels are checked by the packaging script
 before an archive is published.  The project itself is MIT licensed; the

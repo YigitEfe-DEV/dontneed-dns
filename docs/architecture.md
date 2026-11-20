@@ -141,6 +141,38 @@ when the limit is reached; the proxy refuses new connections above
 `proxy.max_connections`.  Both servers shut down cleanly: the sockets are
 closed, the pending work is cancelled and the listener ports are released.
 
+## The Fedora edition
+
+The Fedora edition adds one module and one entry point on top of the
+architecture above:
+
+| File | Responsibility |
+| --- | --- |
+| `dontneed_dns/installer.py` | The installation, the removal and the status report of the self contained edition |
+| `packaging/linux/fedora_entry.py` | The entry point of the executable: it dispatches to the installer or to the command line interface |
+| `scripts/build_fedora_executable.py` | Builds the executable with PyInstaller and writes the checksum |
+
+The installer never talks to systemd directly.  It uses the existing
+`LinuxPlatformAdapter`, so the units, the state machine and the removal
+behave exactly like they do for a source installation.  The only new
+behaviour in the adapter is the `ExecStart` line: a self contained
+installation runs the installed executable
+(`dontneed-dns run dns --config ...`) instead of an interpreter with the
+module path, because the executable has no module tree.
+
+The executable is built with PyInstaller in one file mode.  It carries the
+interpreter, the extension modules and the data files of `textual`,
+`typer` and `rich`, which is why the release job builds it inside a
+Fedora container: a binary that is linked against another distribution's C
+library does not run everywhere.
+
+The installer only writes into the home directory: the executable below
+`~/.local/share/dontneed-dns/bin`, the unit files below
+`~/.config/systemd/user`, the configuration below `~/.config/dontneed-dns`
+and the state below `~/.local/state/dontneed-dns`.  It never asks for
+root privileges and it never changes the firewall, the routing table or
+`/etc/resolv.conf`.
+
 ## Testing strategy
 
 * `tests/unit` - pure logic: DNS messages, the DoH client, the resolver, the

@@ -15,9 +15,11 @@ from pathlib import Path
 from dontneed_dns.core.constants import APP_DIR_NAME, CONFIG_FILE_NAME, LOG_FILE_NAME
 
 __all__ = [
+    "bin_dir",
     "config_dir",
     "config_path",
     "data_dir",
+    "install_dir",
     "log_dir",
     "log_path",
     "pid_file",
@@ -80,3 +82,24 @@ def log_path() -> Path:
 def pid_file(name: str = "dontneed-dns") -> Path:
     """The PID file for a component."""
     return data_dir() / f"{name}.pid"
+
+
+def install_dir() -> Path:
+    """The directory the installer places the application in.
+
+    The layout matches the one the shell installer used: the application
+    lives below the user data directory, never in a system directory, so
+    that no privileged write is needed for the installation itself.
+    """
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else _home() / "AppData" / "Local"
+    else:
+        base = os.environ.get("XDG_DATA_HOME")
+        root = Path(base) if base else _home() / ".local" / "share"
+    return root / APP_DIR_NAME
+
+
+def bin_dir() -> Path:
+    """The directory that holds the installed executable."""
+    return install_dir() / "bin"

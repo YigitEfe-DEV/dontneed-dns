@@ -73,6 +73,32 @@ jobs:
           dontneed-dns config validate
           dontneed-dns status || true
 
+  test-fedora:
+    name: Tests (Fedora 45)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:45
+    steps:
+      # The build tools are installed before the checkout, because the
+      # container has no git and the checkout needs it.
+      - name: Install the build tools
+        run: |
+          dnf -y install git python3 python3-pip python3-pip-wheel python3-devel gcc libffi-devel
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev]"
+
+      - uses: actions/checkout@v4
+
+      - name: Run the tests
+        run: .venv/bin/python -m pytest tests/ -v --tb=short
+
+      - name: Check that the command line interface works
+        run: |
+          .venv/bin/dontneed-dns version
+          .venv/bin/dontneed-dns --help
+          .venv/bin/dontneed-dns config validate
+
   test-windows:
     name: Tests (Windows, ${{ matrix.python-version }})
     runs-on: windows-latest

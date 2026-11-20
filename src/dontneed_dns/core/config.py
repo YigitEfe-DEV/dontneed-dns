@@ -96,7 +96,10 @@ class ServiceConfig:
     """Settings of the platform service integration."""
 
     scope: str = "user"
-    autostart: bool = False
+    #: Start the components automatically after the next login.  The
+    #: installer honours this value: the units are enabled when it is true
+    #: and disabled when it is false.
+    autostart: bool = True
 
 
 @dataclass

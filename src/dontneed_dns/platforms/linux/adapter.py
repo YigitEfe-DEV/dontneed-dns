@@ -47,6 +47,24 @@ SYSTEMD_USER_UNIT_DIR = _user_unit_dir()
 SYSTEMD_SYSTEM_UNIT_DIR = Path("/etc/systemd/system")
 SYSTEM_CONFIG_DIR = Path("/etc/dontneed-dns")
 
+#: Name of the executable that the installer places in the user bin directory.
+INSTALLED_BINARY_NAME = "dontneed-dns"
+
+
+def _systemd_quote(value: str) -> str:
+    """Quote a value for a systemd command line.
+
+    Paths with spaces or quotes have to be quoted, otherwise systemd splits
+    the command at the wrong place.
+    """
+    if not value:
+        return '""'
+    if any(character.isspace() for character in value) or '"' in value or "\\" in value:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
 _UNIT_FILES = {
     Component.DNS: DNS_UNIT_NAME,
     Component.PROXY: PROXY_UNIT_NAME,
@@ -94,10 +112,23 @@ class LinuxPlatformAdapter(PlatformAdapter):
 
     name = "linux"
 
-    def __init__(self, scope: str = "user") -> None:
+    def __init__(
+        self,
+        scope: str = "user",
+        *,
+        executable: str | None = None,
+        config_path: str | None = None,
+    ) -> None:
         if scope not in ("user", "system"):
             raise ValueError(f"unknown scope {scope!r}")
         self.scope = scope
+        #: The configuration file of the user scope.  ``None`` means the
+        #: default location below the home directory.
+        self.config_path = config_path
+        #: The program the unit starts.  ``None`` means "the interpreter that
+        #: runs this code".  The installer passes the path of the executable
+        #: it placed in the user bin directory.
+        self.executable = executable
         self.distro: DistroInfo = detect_distro()
 
     # -- introspection ----------------------------------------------------
@@ -157,9 +188,17 @@ class LinuxPlatformAdapter(PlatformAdapter):
     def _unit_name(self, component: Component) -> str:
         return _UNIT_FILES[component]
 
-    def _unit_path(self, component: Component, scope: str) -> Path:
+    def unit_name(self, component: Component) -> str:
+        """The name of the unit file of ``component``."""
+        return _UNIT_FILES[component]
+
+    def unit_path(self, component: Component, scope: str = "user") -> Path:
+        """The path of the unit file of ``component`` in ``scope``."""
         directory = SYSTEMD_USER_UNIT_DIR if scope == "user" else SYSTEMD_SYSTEM_UNIT_DIR
         return directory / _UNIT_FILES[component]
+
+    def _unit_path(self, component: Component, scope: str) -> Path:
+        return self.unit_path(component, scope)
 
     def _systemctl(self, *args: str, scope: str | None = None, timeout: float = 30.0) -> CommandResult:
         argv = ["systemctl"]
@@ -268,15 +307,25 @@ class LinuxPlatformAdapter(PlatformAdapter):
     # -- installation -----------------------------------------------------
 
     def _exec_start(self) -> tuple[str, str]:
+        """Return the ``ExecStart`` program and the extra environment lines."""
+        program = self.executable or sys.executable
+        # A self contained build has no module tree and no interpreter to
+        # point at: the installed executable runs the component itself.  An
+        # explicit executable means the same thing, even when the installer
+        # itself was not built as a frozen application.
+        if getattr(sys, "frozen", False) or self.executable is not None:
+            return f"{_systemd_quote(program)} run", ""
         module_root = Path(dontneed_dns.__file__).resolve().parent.parent
-        python = sys.executable
+        python = program
         # A virtual environment already knows the package; a system wide
         # installation needs the module root on the import path.
         environment = "" if sys.prefix != sys.base_prefix else f"Environment=PYTHONPATH={module_root}"
-        return f"{python} -m dontneed_dns.service_runner", environment
+        return f"{_systemd_quote(python)} -m dontneed_dns.service_runner", environment
 
     def _config_path(self, scope: str) -> Path:
         if scope == "user":
+            if self.config_path:
+                return Path(self.config_path)
             from dontneed_dns.core.paths import config_path
 
             return config_path()
@@ -284,7 +333,7 @@ class LinuxPlatformAdapter(PlatformAdapter):
 
     def _render_unit(self, component: Component, scope: str) -> str:
         exec_start, environment = self._exec_start()
-        command = f"{exec_start} {component.value} --config {self._config_path(scope)}"
+        command = f"{exec_start} {component.value} --config {_systemd_quote(str(self._config_path(scope)))}"
         if scope == "user":
             from dontneed_dns.core.paths import data_dir
 
@@ -429,6 +478,7 @@ class LinuxPlatformAdapter(PlatformAdapter):
             "config": self._config_path(scope),
             "dns_unit": self._unit_path(Component.DNS, scope),
             "proxy_unit": self._unit_path(Component.PROXY, scope),
+            "binary": Path(self.executable) if self.executable else Path(sys.executable),
         }
         if scope == "user":
             from dontneed_dns.core.paths import data_dir, log_dir

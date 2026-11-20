@@ -4,6 +4,7 @@
 
 | Version | Supported |
 | --- | --- |
+| 0.2.x | Yes |
 | 0.1.x | Yes |
 
 ## Reporting a vulnerability
@@ -40,3 +41,5 @@ notes unless they prefer otherwise.
 * The default ports collide with another program.  The port is
   configurable.
 * The Windows executable is not signed and Windows shows a warning.
+* The Fedora executable is not signed either.  The SHA-256 checksum of the
+  release covers it.

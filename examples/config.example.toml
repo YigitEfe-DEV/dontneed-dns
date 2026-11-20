@@ -74,7 +74,7 @@ max_connections = 256
 scope = "user"
 
 # Whether the components start automatically after they were installed.
-autostart = false
+autostart = true
 
 
 [logging]

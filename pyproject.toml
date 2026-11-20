@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dontneed-dns"
-version = "0.1.2"
+version = "0.2.0"
 description = "Cross-platform DNS-over-HTTPS and TLS fragmenting proxy management for Discord connectivity."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -48,6 +48,7 @@ Issues = "https://github.com/YigitEfe-DEV/dontneed-dns/issues"
 
 [project.scripts]
 dontneed-dns = "dontneed_dns.cli.main:main"
+dontneed-dns-install = "dontneed_dns.installer:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dontneed_dns"]
