@@ -173,13 +173,29 @@ export PATH="$HOME/.local/share/dontneed-dns/venv/bin:$PATH"
 
 ## Installation from the source tree
 
+The **project root** is the directory that holds `pyproject.toml`.  It is the
+root of the repository; `packaging/linux` holds the shell installer and is
+**not** a Python package, so nothing can be installed from there.
+
 ```bash
 git clone https://github.com/YigitEfe-DEV/dontneed-dns
-cd dontneed-dns
-python3 -m venv .venv
+cd dontneed-dns                 # the directory that holds pyproject.toml
+python3 -m venv .venv           # any Python 3.11 or newer will do
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/dontneed-dns install --scope user --yes
 ```
+
+A virtual environment that was made by a version manager works the same way;
+only the path of the interpreter changes:
+
+```bash
+cd dontneed-dns                 # the directory that holds pyproject.toml
+<your version manager> venv create
+<your version manager> pip install -e ".[dev]"
+.venv/bin/dontneed-dns install --scope user --yes
+```
+
+On Fedora the single executable of the release is the shortest way.
 
 ## The systemd units
 

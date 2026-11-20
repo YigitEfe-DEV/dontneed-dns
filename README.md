@@ -142,7 +142,7 @@ automatic start.
 See [docs/linux.md](docs/linux.md) for the details, for the system scope
 and for the rollback.
 
-## Installation on Linux (source archive)
+## Feature comparison
 
 | Feature | Linux | Windows |
 | --- | --- | --- |
@@ -181,6 +181,33 @@ The installer creates a virtual environment from the bundled wheelhouse (no
 network access needed), registers the systemd user services and never needs
 root.  See [docs/linux.md](docs/linux.md) for the details, for the system
 scope and for the rollback.
+
+### Installation from the source tree
+
+The **project root** is the directory that holds `pyproject.toml`.  It is the
+root of the repository; `packaging/linux` holds the shell installer and is
+**not** a Python package, so nothing can be installed from there.
+
+```bash
+git clone https://github.com/YigitEfe-DEV/dontneed-dns
+cd dontneed-dns                 # the directory that holds pyproject.toml
+python3 -m venv .venv           # any Python 3.11 or newer will do
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/dontneed-dns install --scope user --yes
+```
+
+A virtual environment that was made by a version manager works the same way;
+only the path of the interpreter changes:
+
+```bash
+cd dontneed-dns                 # the directory that holds pyproject.toml
+<your version manager> venv create
+<your version manager> pip install -e ".[dev]"
+.venv/bin/dontneed-dns install --scope user --yes
+```
+
+On Fedora the single executable of the release is the shortest way; see
+[Installation on Fedora](#installation-on-fedora-single-executable).
 
 ## Installation on Windows
 
