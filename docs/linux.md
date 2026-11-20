@@ -145,6 +145,11 @@ The router changes the rules of the machine and therefore needs the
 installed it and has that single capability.  The DNS resolver and the
 proxy keep running as the user in the user scope of systemd.
 
+The system service needs a copy of the executable in `/usr/local/bin`,
+because the system is not allowed to start a program of a user home.
+The installer places that copy, gives it the label of the system and
+removes it again with the uninstall.
+
 ### The removal
 
 `dontneed-dns-fedora-x86_64 --uninstall` stops the router, removes the

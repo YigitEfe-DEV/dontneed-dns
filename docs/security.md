@@ -55,6 +55,12 @@ NetworkManager or the settings of systemd-resolved.  The DNS queries of
 the user are redirected with a rule of the project and the rule is
 removed again with it.
 
+The installer places a copy of the executable in `/usr/local/bin` for the
+system service, because the system is not allowed to start a program of a
+user home.  The copy belongs to root and carries the label of the system.
+The label of the copy in the home directory is repaired with
+`restorecon`, because a copy keeps the label of the file it came from.
+
 ## The self contained executable
 
 The Fedora edition is shipped as one file that carries the interpreter and

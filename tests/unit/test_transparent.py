@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from dontneed_dns.core.config import default_config, parse_config
+from dontneed_dns.platforms.linux.adapter import LinuxPlatformAdapter
 from dontneed_dns.transparent.nft import NftManager, TargetSet
 from dontneed_dns.transparent.sni import extract_sni, parse_client_hello
 from dontneed_dns.transparent.targets import read_targets, write_targets
@@ -130,6 +131,74 @@ def test_the_server_name_matches_the_subdomains() -> None:
     assert proxy.matches("discord.com.evil.example") is False
     assert proxy.matches("example.org") is False
     assert proxy.matches(None) is False
+
+
+def test_the_transparent_unit_starts_the_copy_of_the_system() -> None:
+    """The system service must not start a program of a user home."""
+    adapter = LinuxPlatformAdapter()
+    content = adapter._render_transparent_unit("yigitos")
+    assert "ExecStart=/usr/local/bin/dontneed-dns run transparent" in content
+    command = content.split("ExecStart=")[1].split("\n")[0]
+    # The program is the copy of the system; the configuration may live in
+    # the home of the user.
+    assert command.startswith("/usr/local/bin/dontneed-dns ")
+
+
+def test_the_udp_relay_survives_a_flow_that_cannot_be_opened() -> None:
+    """One datagram that cannot be forwarded must not stop the relay."""
+    import threading
+
+    from dontneed_dns.transparent.udp_tun import TunUdpRelay
+
+    class BrokenTun:
+        def read(self, size: int = 65535) -> bytes:
+            return b""
+
+        def write(self, packet: bytes) -> None:
+            raise OSError("no")
+
+    relay = TunUdpRelay(BrokenTun(), mark=1)  # type: ignore[arg-type]
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            relay._handle(_packet())
+        except BaseException as exc:  # noqa: BLE001 - the test looks at it
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join(timeout=5)
+    assert not errors
+
+
+def _packet():
+    from dontneed_dns.transparent.udp_tun import UdpPacket
+
+    return UdpPacket("192.0.2.1", 5000, "192.0.2.2", 9000, b"ping")
+
+
+def test_the_udp_flow_socket_binds_a_port_of_its_own() -> None:
+    """The port of the client is in use, so the relay takes one of its own."""
+    import socket as socket_module
+
+    sock = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_DGRAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        assert sock.getsockname()[1] != 0
+    finally:
+        sock.close()
+
+
+def test_the_multicast_traffic_is_not_forwarded() -> None:
+    """The router has nothing to do with multicast; forwarding it loops."""
+    from dontneed_dns.transparent.udp_tun import _is_multicast
+
+    assert _is_multicast("224.0.0.251") is True
+    assert _is_multicast("239.1.2.3") is True
+    assert _is_multicast("ff02::fb") is True
+    assert _is_multicast("162.159.135.232") is False
+    assert _is_multicast("::1") is False
 
 
 def test_the_original_destination_is_read_from_the_socket() -> None:

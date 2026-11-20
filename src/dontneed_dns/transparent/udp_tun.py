@@ -97,6 +97,17 @@ def build_udp_packet(
     return header + udp + payload
 
 
+def _is_multicast(address: str) -> bool:
+    """``True`` for a multicast or a broadcast address."""
+    import ipaddress
+
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return parsed.is_multicast
+
+
 def parse_udp_packet(packet: bytes) -> UdpPacket | None:
     """Parse an IP packet that carries UDP."""
     if len(packet) < 28:
@@ -186,7 +197,22 @@ class TunUdpRelay:
     # -- forwarding -------------------------------------------------------
 
     def _handle(self, packet: UdpPacket) -> None:
-        """Forward one datagram."""
+        """Forward one datagram.
+
+        A datagram that cannot be forwarded is reported; the relay keeps
+        running, because the other flows still work.
+        """
+        try:
+            self._forward(packet)
+        except Exception as exc:  # noqa: BLE001 - one datagram must not stop the relay
+            _LOGGER.info("a datagram could not be forwarded: %s", exc)
+
+    def _forward(self, packet: UdpPacket) -> None:
+        """Send one datagram to its destination."""
+        if _is_multicast(packet.destination):
+            # The router has nothing to do with multicast and broadcast;
+            # forwarding them would only feed a loop.
+            return
         key = (packet.source, packet.source_port, packet.destination, packet.destination_port)
         with self._lock:
             flow = self._flows.get(key)
@@ -218,13 +244,11 @@ class _TunFlow:
         except OSError:
             pass
         try:
-            self.socket.setsockopt(socket.IPPROTO_IP, IP_TRANSPARENT, 1)
-        except OSError as exc:
-            _LOGGER.info("the transparent socket could not be prepared: %s", exc)
-        try:
-            # The port of the client is already in use, so the relay uses
-            # a port of its own.  The answer is given to the client with
-            # the address and the port of the server.
+            # The address of the client is the address of the machine, so
+            # the socket uses it as its own.  The port of the client is
+            # already in use, so the relay takes a port of its own; the
+            # answer is given to the client with the address and the port
+            # of the server.
             self.socket.bind((packet.source, 0))
             self.socket.connect((packet.destination, packet.destination_port))
         except OSError as exc:

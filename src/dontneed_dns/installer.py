@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -260,6 +261,7 @@ class Installer:
                 os.chmod(temporary, 0o755)
                 os.replace(temporary, target)
             os.chmod(target, 0o755)
+            _restore_label(target)
         except OSError as exc:
             return self._fail("Application", f"could not be installed: {exc.strerror or exc}")
         return self._record("Application", True, f"installed to {target}")
@@ -601,6 +603,22 @@ The installation writes only into your home directory:
   {config_path}    the configuration
   {log_dir}        the log files
 """
+
+
+def _restore_label(path: Path) -> None:
+    """Give the file the label that the policy of the system expects.
+
+    A copy keeps the label of the file it came from.  When the executable
+    was downloaded into a temporary directory, the label of that directory
+    follows it and the system service is not allowed to start it.
+    """
+    restorecon = shutil.which("restorecon")
+    if restorecon is None:
+        return
+    try:
+        subprocess.run([restorecon, "-F", str(path)], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def ensure_elevation() -> tuple[bool, str]:

@@ -55,6 +55,11 @@ INSTALLED_BINARY_NAME = "dontneed-dns"
 #: router has to change the nftables rules of the machine.
 TRANSPARENT_UNIT_NAME = "dontneed-dns-transparent.service"
 
+#: Where the executable of the transparent router is placed.  The router is
+#: a system service, and the system is not allowed to start a program of a
+#: user home, so it needs a copy of its own.
+SYSTEM_BINARY_PATH = "/usr/local/bin/dontneed-dns"
+
 
 def current_user_name() -> str:
     """The name of the user that runs the installer."""
@@ -522,7 +527,7 @@ class LinuxPlatformAdapter(PlatformAdapter):
     def _render_transparent_unit(self, user: str) -> str:
         from dontneed_dns.core.paths import data_dir
 
-        program = self.executable or sys.executable
+        program = SYSTEM_BINARY_PATH
         config = self._config_path("user")
         return _TRANSPARENT_UNIT_TEMPLATE.format(
             exec_start=(f"{_systemd_quote(program)} run transparent --config {_systemd_quote(str(config))}"),
@@ -562,6 +567,32 @@ class LinuxPlatformAdapter(PlatformAdapter):
         content = self._render_transparent_unit(account)
 
         from dontneed_dns.core.paths import data_dir
+
+        # The system service needs a copy of its own: the system is not
+        # allowed to start a program of a user home.
+        source = Path(self.executable) if self.executable else Path(sys.executable)
+        if source.exists():
+            staged = Path("/tmp") / f"{INSTALLED_BINARY_NAME}.system"
+            try:
+                shutil.copy2(source, staged)
+                os.chmod(staged, 0o755)
+                result = self._elevated(["install", "-m", "0755", str(staged), SYSTEM_BINARY_PATH])
+                if not result.ok:
+                    return OperationResult.needs_elevation(
+                        "The transparent router could not be installed.",
+                        detail=describe_failure(result),
+                    )
+                self._elevated(["restorecon", "-F", SYSTEM_BINARY_PATH], timeout=30)
+            except OSError as exc:
+                return OperationResult.failure(
+                    "the executable of the transparent router could not be prepared.",
+                    detail=exc.strerror or str(exc),
+                )
+            finally:
+                try:
+                    staged.unlink()
+                except OSError:
+                    pass
 
         staged = data_dir() / f"{TRANSPARENT_UNIT_NAME}.new"
         try:
@@ -609,6 +640,8 @@ class LinuxPlatformAdapter(PlatformAdapter):
                 )
             changed = True
         self._elevated(["systemctl", "daemon-reload"])
+        # The copy of the executable is removed as well.
+        self._elevated(["rm", "-f", SYSTEM_BINARY_PATH])
         # The rules of the project are removed as well, in case the unit
         # was killed without running its stop path.
         for family, name in (("ip", self.transparent_table()), ("ip6", self.transparent_table() + "6")):

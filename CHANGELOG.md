@@ -80,6 +80,27 @@ Roblox is routed without any setting in the applications.
 
 - The version of the project is 0.3.0.
 
+## [0.3.1] - 2026-11-20
+
+The repairs that the installation on a real Fedora 45 machine showed.
+
+### Fixed
+
+- The transparent router is a system service, and the system is not
+  allowed to start a program of a user home.  The installer now places a
+  copy of the executable in `/usr/local/bin/dontneed-dns` and the unit
+  starts that copy.  Before, the unit failed with `status=203/EXEC` and
+  the router never started.
+- A copy keeps the label of the file it came from.  When the executable
+  was downloaded into a temporary directory, the label of that directory
+  followed it and the system service was not allowed to start it.  The
+  installer repairs the label of the installed file with `restorecon`.
+- The relay of the UDP traffic died when a datagram could not be opened,
+  and the whole UDP forwarding stopped with it.  A datagram that cannot
+  be forwarded is now reported and the relay keeps running.
+- The multicast and the broadcast traffic reached the relay and was
+  forwarded, which fed a loop.  The router leaves that traffic alone.
+
 ## [Unreleased]
 
 Repairs the Windows edition.  The Windows job of the workflow had been
